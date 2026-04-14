@@ -147,20 +147,22 @@ pub fn lookup_quirks(distribution: Distribution) -> Vec<Quirk> {
         // accepts kernels signed by the shipped distro CA. No known quirks.
         Distribution::Debian => Vec::new(),
 
-        // Fedora (and RHEL-derivatives detected under the same layout).
-        // Fedora's kernel is signed by the Fedora UEFI CA, but RHEL/Rocky/
-        // Alma kernels historically refuse `kexec_file_load` of a kernel
-        // signed by a *different* CA even when `KEXEC_SIG` is satisfied
-        // (their lockdown LSM adds an extra keyring check). Surface this
-        // to the user so they can preflight-verify before commit.
-        Distribution::Fedora => vec![Quirk::CrossDistroKexecRefused],
+        // Fedora's kernel is signed by the Fedora UEFI CA. RHEL lineage
+        // enforces an additional keyring check inside `kexec_file_load`
+        // that rejects kernels signed by a *different* CA even when
+        // `KEXEC_SIG` would accept; the rescue-tui surfaces this as
+        // `CrossDistroKexecRefused` so the user sees a specific diagnostic
+        // instead of a generic EPERM.
+        Distribution::Fedora | Distribution::RedHat => vec![Quirk::CrossDistroKexecRefused],
 
         // Arch install media ships unsigned kernels by default (no
-        // shim-review-board-approved shim). Unknown distributions share the
-        // same conservative default: assume unsigned until proven otherwise.
-        // Collapsed into one arm so clippy's identical-match-arms lint is
-        // satisfied — the distinction lives in the compatibility matrix doc.
-        Distribution::Arch | Distribution::Unknown => vec![Quirk::UnsignedKernel],
+        // shim-review-board-approved shim). Alpine and NixOS ship unsigned
+        // ISOs by default too. Unknown distributions share the same
+        // conservative default: assume unsigned until proven otherwise.
+        Distribution::Arch
+        | Distribution::Alpine
+        | Distribution::NixOS
+        | Distribution::Unknown => vec![Quirk::UnsignedKernel],
     }
 }
 
@@ -242,6 +244,28 @@ mod tests {
         // Conservative default when we can't identify the distribution.
         let q = lookup_quirks(Distribution::Unknown);
         assert!(q.contains(&Quirk::UnsignedKernel));
+    }
+
+    #[test]
+    fn redhat_inherits_cross_distro_refusal() {
+        // RHEL/Rocky/Alma share Fedora's layout + the same lockdown policy.
+        let q = lookup_quirks(Distribution::RedHat);
+        assert!(q.contains(&Quirk::CrossDistroKexecRefused));
+        assert!(!q.contains(&Quirk::UnsignedKernel));
+    }
+
+    #[test]
+    fn alpine_flags_unsigned_kernel() {
+        assert!(
+            lookup_quirks(Distribution::Alpine).contains(&Quirk::UnsignedKernel)
+        );
+    }
+
+    #[test]
+    fn nixos_flags_unsigned_kernel() {
+        assert!(
+            lookup_quirks(Distribution::NixOS).contains(&Quirk::UnsignedKernel)
+        );
     }
 
     #[test]
