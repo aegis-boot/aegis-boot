@@ -39,6 +39,7 @@ require qemu-system-x86_64
 require mkfs.vfat
 require mcopy
 require mmd
+require sgdisk
 require timeout
 
 for f in "$OVMF_CODE" "$OVMF_VARS_SRC" "$SHIM_SRC" "$GRUB_SRC"; do
@@ -102,22 +103,32 @@ menuentry "aegis-boot e2e" {
 }
 EOF
 
-# Build the FAT32 ESP image.
-ESP_SIZE_MB=200
-ESP_IMG="$WORK/esp.img"
-dd if=/dev/zero of="$ESP_IMG" bs=1M count="$ESP_SIZE_MB" status=none
-mkfs.vfat -F 32 -n AEGIS_ESP "$ESP_IMG" >/dev/null
+# Build the FAT32 ESP partition contents.
+ESP_PART_MB=200
+ESP_PART="$WORK/esp.part"
+dd if=/dev/zero of="$ESP_PART" bs=1M count="$ESP_PART_MB" status=none
+mkfs.vfat -F 32 -n AEGIS_ESP "$ESP_PART" >/dev/null
 
-mmd -i "$ESP_IMG" ::/EFI ::/EFI/BOOT ::/EFI/ubuntu
-mcopy -i "$ESP_IMG" "$SHIM_SRC" ::/EFI/BOOT/BOOTX64.EFI
-mcopy -i "$ESP_IMG" "$GRUB_SRC" ::/EFI/BOOT/grubx64.efi
+mmd -i "$ESP_PART" ::/EFI ::/EFI/BOOT ::/EFI/ubuntu
+mcopy -i "$ESP_PART" "$SHIM_SRC" ::/EFI/BOOT/BOOTX64.EFI
+mcopy -i "$ESP_PART" "$GRUB_SRC" ::/EFI/BOOT/grubx64.efi
 # Canonical's signed grub looks for its config in /EFI/ubuntu/grub.cfg.
-# Put it there as the canonical home; also drop a copy in /EFI/BOOT for
-# generic-shim path completeness.
-mcopy -i "$ESP_IMG" "$WORK/grub.cfg" ::/EFI/ubuntu/grub.cfg
-mcopy -i "$ESP_IMG" "$WORK/grub.cfg" ::/EFI/BOOT/grub.cfg
-mcopy -i "$ESP_IMG" "$KERNEL" ::/vmlinuz
-mcopy -i "$ESP_IMG" "$WORK/combined.img" ::/initrd.img
+# Drop it there as the canonical home; also in /EFI/BOOT for fallback.
+mcopy -i "$ESP_PART" "$WORK/grub.cfg" ::/EFI/ubuntu/grub.cfg
+mcopy -i "$ESP_PART" "$WORK/grub.cfg" ::/EFI/BOOT/grub.cfg
+mcopy -i "$ESP_PART" "$KERNEL" ::/vmlinuz
+mcopy -i "$ESP_PART" "$WORK/combined.img" ::/initrd.img
+
+# Wrap in a GPT disk with the ESP at sector 2048. OVMF's BDS scans for
+# `EFI System Partition` GUIDs and won't reliably auto-boot a bare FAT32
+# image — the partition table is what makes it discoverable.
+DISK_SIZE_MB=$((ESP_PART_MB + 4))
+ESP_IMG="$WORK/disk.img"
+dd if=/dev/zero of="$ESP_IMG" bs=1M count="$DISK_SIZE_MB" status=none
+sgdisk -o "$ESP_IMG" >/dev/null
+sgdisk -n 1:2048:+${ESP_PART_MB}M -t 1:ef00 -c 1:"EFI System" "$ESP_IMG" >/dev/null
+# Splice the partition contents into the GPT image.
+dd if="$ESP_PART" of="$ESP_IMG" bs=512 seek=2048 conv=notrunc status=none
 
 # Prepare writable OVMF vars copy.
 cp "$OVMF_VARS_SRC" "$WORK/vars.fd"
