@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build + attach release artifacts
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            busybox-static cpio
+
+      - name: Install Rust toolchain (pinned)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain 1.85.0 --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build rescue-tui (release)
+        env:
+          SOURCE_DATE_EPOCH: "1700000000"
+        run: cargo build --release -p rescue-tui
+
+      - name: Build initramfs
+        env:
+          SOURCE_DATE_EPOCH: "1700000000"
+        run: ./scripts/build-initramfs.sh
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          cargo install --locked cargo-cyclonedx --version 0.5.7
+          cargo cyclonedx --format json --override-filename sbom
+          mv sbom.cdx.json out/sbom.cdx.json
+
+      - name: Stage release artifacts
+        run: |
+          cp target/release/rescue-tui out/rescue-tui
+          ( cd out && sha256sum rescue-tui > rescue-tui.sha256 )
+          echo "--- Release artifacts ---"
+          ls -l out/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          tag="${{ steps.tag.outputs.name }}"
+          # Prefer the CHANGELOG entry if present; otherwise synthesize.
+          if [ -f CHANGELOG.md ] && grep -q "^## \[${tag#v}\]" CHANGELOG.md; then
+            awk -v tag="${tag#v}" '
+              BEGIN { inside = 0 }
+              /^## \[/ {
+                if (inside) exit
+                if ($0 ~ "^## \\[" tag "\\]") inside = 1
+                else next
+              }
+              inside { print }
+            ' CHANGELOG.md > out/release-notes.md
+          else
+            echo "Release ${tag}" > out/release-notes.md
+          fi
+          echo "path=out/release-notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.tag.outputs.name }}"
+          gh release create "$tag" \
+            --title "aegis-boot $tag" \
+            --notes-file "${{ steps.notes.outputs.path }}" \
+            out/initramfs.cpio.gz \
+            out/initramfs.cpio.gz.sha256 \
+            out/rescue-tui \
+            out/rescue-tui.sha256 \
+            out/sbom.cdx.json
