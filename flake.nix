@@ -14,31 +14,27 @@
       {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            (rustChannelOf {
-              rustToolchain = rustPlatform.buildRustEnv {
-                rustc = rustVersions.stable;
-                Cargo = rustVersions.stable;
-              };
-            }.rust.override {
-              extensions = [ "rustfmt" "clippy" ];
-            })
+            rustc
+            cargo
+            rustfmt
+            clippy
             gcc
             pkg-config
             openssl
             python311
             python311Packages.pip
             nasm
-            uuid
-            iasl
+            util-linux
+            acpica-tools
             git
           ];
 
-          RUST_VERSION = "1.75.0";
+          RUST_VERSION = "1.85.0";
 
           shellHook = ''
             echo "Aegis-Boot Build Environment"
             echo "================================"
-            echo "Rust: $RUST_VERSION"
+            echo "Rust: $(rustc --version)"
             echo "Nixpkgs: ${nixpkgs.lib.version}"
           '';
         };

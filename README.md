@@ -14,3 +14,11 @@ Reproducible UEFI Secure Boot orchestration infrastructure.
 ## Status
 
 Work in progress. See BUILDING.md for setup and THREAT_MODEL.md for security boundaries.
+
+## License
+
+Dual-licensed under [Apache-2.0](./LICENSE-APACHE) or [MIT](./LICENSE-MIT) at your option.
+
+## Security
+
+Report vulnerabilities privately — see [SECURITY.md](./SECURITY.md).
