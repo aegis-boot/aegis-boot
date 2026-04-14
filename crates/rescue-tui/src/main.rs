@@ -42,14 +42,24 @@ fn main() -> ExitCode {
 }
 
 fn tracing_subscriber_init() {
-    // Logs to stderr only if RUST_LOG is set. The TUI owns stdout.
-    let _ = tracing_subscriber::fmt()
-        .with_writer(io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .try_init();
+    // systemd-journald captures stderr from services it runs, so stderr is
+    // the right destination even for "structured" output — the journal
+    // handles it. `AEGIS_LOG_JSON=1` switches to a machine-readable format
+    // suited to `journalctl --output=json`; the default stays human-readable.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("rescue_tui=info,iso_probe=info,kexec_loader=info"));
+    if std::env::var("AEGIS_LOG_JSON").is_ok() {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(io::stderr)
+            .with_env_filter(filter)
+            .json()
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(io::stderr)
+            .with_env_filter(filter)
+            .try_init();
+    }
 }
 
 fn parse_roots(env_var: Option<&str>) -> Vec<PathBuf> {
@@ -60,18 +70,42 @@ fn parse_roots(env_var: Option<&str>) -> Vec<PathBuf> {
 }
 
 fn run(roots: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        roots = ?roots,
+        "rescue-tui starting"
+    );
     let isos = match iso_probe::discover(roots) {
         Ok(v) => v,
-        Err(iso_probe::ProbeError::NoIsosFound) => Vec::new(),
-        Err(e) => return Err(e.into()),
+        Err(iso_probe::ProbeError::NoIsosFound) => {
+            tracing::info!("no ISOs discovered under any root");
+            Vec::new()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "ISO discovery failed");
+            return Err(e.into());
+        }
     };
-    // Startup banner to stderr — visible on the serial console before the TUI
-    // takes over stdout, useful for smoke tests and operator triage on
-    // hardware where the terminal emulator doesn't report a usable size.
+    // Startup banner to stderr — mirrored via tracing::info! so structured
+    // consumers (journald, CI smoke greps) see the same signal as humans
+    // reading the serial console directly.
     eprintln!(
         "aegis-boot rescue-tui starting: discovered {} ISO(s)",
         isos.len()
     );
+    tracing::info!(
+        discovered = isos.len(),
+        "ISO discovery complete"
+    );
+    for iso in &isos {
+        tracing::debug!(
+            label = %iso.label,
+            path = %iso.iso_path.display(),
+            distribution = ?iso.distribution,
+            quirks = ?iso.quirks,
+            "discovered ISO"
+        );
+    }
     let mut state = AppState::new(isos);
 
     enable_raw_mode()?;
@@ -130,12 +164,25 @@ fn event_loop<B: ratatui::backend::Backend>(
 
 fn attempt_kexec(state: &mut AppState, idx: usize) {
     let Some(iso) = state.isos.get(idx).cloned() else {
+        tracing::warn!(idx, "attempt_kexec called with out-of-range index");
         return;
     };
+    tracing::info!(
+        label = %iso.label,
+        iso_path = %iso.iso_path.display(),
+        "user confirmed kexec"
+    );
     let prepared = match iso_probe::prepare(&iso) {
-        Ok(p) => p,
+        Ok(p) => {
+            tracing::info!(
+                mount = %p.mount_point().display(),
+                kernel = %p.kernel.display(),
+                "prepared ISO for kexec"
+            );
+            p
+        }
         Err(e) => {
-            tracing::warn!("iso_probe::prepare failed: {e}");
+            tracing::warn!(error = %e, "iso_probe::prepare failed");
             state.record_kexec_error(&kexec_loader::KexecError::Io(io::Error::other(
                 e.to_string(),
             )));
@@ -147,11 +194,20 @@ fn attempt_kexec(state: &mut AppState, idx: usize) {
         initrd: prepared.initrd.clone(),
         cmdline: prepared.cmdline.clone().unwrap_or_default(),
     };
+    tracing::info!(
+        kernel = %req.kernel.display(),
+        initrd = ?req.initrd.as_ref().map(|p| p.display().to_string()),
+        cmdline = %req.cmdline,
+        "invoking kexec_file_load"
+    );
     // Drop guard: prepared lives until kexec_file_load + reboot replace the
     // process. On error, prepared drops here and unmounts.
     match kexec_loader::load_and_exec(&req) {
         Ok(_unreachable) => unreachable!("load_and_exec returns Infallible on success"),
-        Err(e) => state.record_kexec_error(&e),
+        Err(e) => {
+            tracing::error!(error = %e, "kexec failed");
+            state.record_kexec_error(&e);
+        }
     }
 }
 
