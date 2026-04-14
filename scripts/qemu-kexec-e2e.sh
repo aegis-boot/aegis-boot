@@ -76,27 +76,25 @@ xorriso -as mkisofs -quiet -r -J -V AEGIS_KEXEC_FIXTURE -o "$FIXTURE_ISO" \
     "$WORK/iso-src"
 log "fixture: $(stat -c '%s' "$FIXTURE_ISO") bytes"
 
-# Build a custom initramfs that includes the fixture ISO + runs rescue-tui
-# with AEGIS_AUTO_KEXEC set. The stock build-initramfs.sh doesn't embed
-# extra files, so we patch its output post-hoc: unpack, add fixture,
-# tweak /init to export env vars, re-pack reproducibly.
+# Build a custom initramfs whose /init mounts the attached block device
+# and points AEGIS_ISO_ROOTS at that mount. The fixture ISO itself is
+# passed to QEMU as a separate -drive, which keeps the initramfs small
+# and avoids cpio-size explosion from embedding a signed kernel image.
 if [[ ! -f "$OUT_DIR/initramfs.cpio.gz" ]]; then
     log "building base initramfs"
     "$ROOT_DIR/scripts/build-initramfs.sh"
 fi
 
-log "customizing initramfs with fixture ISO + AEGIS_AUTO_KEXEC"
+log "customizing initramfs /init for auto-kexec"
 UNPACK="$WORK/initramfs"
 mkdir -p "$UNPACK"
 ( cd "$UNPACK" && gzip -dc "$OUT_DIR/initramfs.cpio.gz" | cpio -i --quiet )
 
-mkdir -p "$UNPACK/var/aegis"
-cp "$FIXTURE_ISO" "$UNPACK/var/aegis/fixture.iso"
-
-# Rewrite /init to point ISO roots at the embedded location and set
-# AEGIS_AUTO_KEXEC + a distinctive cmdline so the target kernel's cmdline
-# shows up in its own boot log.
-cat > "$UNPACK/init" <<INIT
+# Rewrite /init: mount the second block device (vda or sda) and point
+# AEGIS_ISO_ROOTS at a directory containing a bind-mount of the
+# attached ISO. busybox `mount` has an `-o loop` applet; we don't need
+# it here because QEMU exposes the ISO as a plain block device.
+cat > "$UNPACK/init" <<'INIT'
 #!/bin/sh
 set -e
 /bin/mount -t proc  proc  /proc
@@ -105,33 +103,42 @@ set -e
 /bin/mount -t tmpfs  run   /run
 /bin/sleep 1
 
+# Find the attached ISO. QEMU attaches it as /dev/sr0 (when using
+# if=ide,media=cdrom) or /dev/vda (virtio-blk).
+ISO_DEV=""
+for candidate in /dev/sr0 /dev/vda /dev/sda; do
+    if [ -b "$candidate" ]; then
+        ISO_DEV="$candidate"
+        break
+    fi
+done
+
+if [ -z "$ISO_DEV" ]; then
+    /bin/echo "aegis-kexec-e2e: no ISO block device found"
+    exec /bin/sh
+fi
+
+/bin/echo "aegis-kexec-e2e: ISO device = $ISO_DEV"
+/bin/mkdir -p /var/aegis /mnt/iso
+
+# iso-probe's discover() walks the root and looks for *.iso files.
+# Expose the attached block device AS a file under /var/aegis — the
+# probe will then loop-mount it and find casper/.
+/bin/ln -s "$ISO_DEV" /var/aegis/fixture.iso
+
 export AEGIS_ISO_ROOTS=/var/aegis
 export AEGIS_AUTO_KEXEC=fixture.iso
-# Distinctive cmdline marker we'll grep from the target kernel's own
-# boot log.
 export RUST_LOG=info
 export PATH=/usr/bin:/usr/sbin:/bin:/sbin
 export TERM=linux
 /bin/echo "aegis-kexec-e2e: invoking rescue-tui in auto-kexec mode"
 /usr/bin/rescue-tui || {
     /bin/echo "aegis-kexec-e2e: rescue-tui exited (unexpected on kexec success)"
-    /bin/sh
+    exec /bin/sh
 }
-/bin/sh
+exec /bin/sh
 INIT
 chmod 0755 "$UNPACK/init"
-
-# We can't easily tell rescue-tui to override cmdline via env, but the
-# fixture ISO doesn't carry its own cmdline, so prepare() returns None
-# and load_and_exec uses "". Inject a marker by wrapping the iso-probe
-# prepared cmdline through... actually simplest: post-hoc edit the
-# fixture's casper/initrd cmdline? That doesn't work either.
-#
-# Pragmatic workaround: match on "Linux version" in the target kernel
-# log instead of cmdline. The target kernel boots with its identifying
-# version banner which is distinctive enough to prove kexec fired.
-# (We cross-checked: initial boot shows the banner once; post-kexec the
-# banner appears again.)
 
 # Repack reproducibly.
 EPOCH=1700000000
@@ -143,7 +150,7 @@ find "$UNPACK" -exec touch -h -d "@$EPOCH" {} +
 log "custom initramfs: $(stat -c '%s' "$WORK/initramfs-with-fixture.cpio.gz") bytes"
 
 OUTPUT="$WORK/serial.log"
-log "booting QEMU (timeout ${TIMEOUT_SECONDS}s)"
+log "booting QEMU (timeout ${TIMEOUT_SECONDS}s) with fixture ISO as cdrom"
 set +e
 timeout "$TIMEOUT_SECONDS" qemu-system-x86_64 \
     -nographic \
@@ -151,7 +158,8 @@ timeout "$TIMEOUT_SECONDS" qemu-system-x86_64 \
     -m 1024M \
     -kernel "$KERNEL" \
     -initrd "$WORK/initramfs-with-fixture.cpio.gz" \
-    -append "console=ttyS0 panic=5 rdinit=/init quiet loglevel=4" \
+    -cdrom "$FIXTURE_ISO" \
+    -append "console=ttyS0 panic=5 rdinit=/init loglevel=4" \
     </dev/null \
     >"$OUTPUT" 2>&1
 qemu_exit=$?
