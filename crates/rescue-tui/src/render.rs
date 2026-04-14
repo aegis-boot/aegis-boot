@@ -152,6 +152,9 @@ impl DistributionLabel for iso_probe::DiscoveredIso {
             iso_probe::Distribution::Arch => "Arch",
             iso_probe::Distribution::Debian => "Debian/Ubuntu",
             iso_probe::Distribution::Fedora => "Fedora",
+            iso_probe::Distribution::RedHat => "RHEL/Rocky/Alma",
+            iso_probe::Distribution::Alpine => "Alpine",
+            iso_probe::Distribution::NixOS => "NixOS",
             iso_probe::Distribution::Unknown => "unknown",
         }
     }

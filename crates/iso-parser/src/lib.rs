@@ -27,6 +27,10 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tracing::{debug, instrument};
 
+#[cfg(test)]
+#[path = "detection_tests.rs"]
+mod detection_tests;
+
 /// Errors that can occur during ISO parsing
 #[derive(Debug, Error)]
 pub enum IsoError {
@@ -60,37 +64,66 @@ pub struct BootEntry {
     pub source_iso: String,
 }
 
-/// Supported distribution families
+/// Supported distribution families.
+///
+/// Ordering of detection matters: more specific matches (Alpine's
+/// `boot/vmlinuz-lts`, NixOS's `boot/bzImage`, RHEL-family's `images/pxeboot`)
+/// must run before the broader ones (Arch's generic `boot/` heuristic).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Distribution {
+    /// Arch Linux install media (`arch/boot/x86_64/vmlinuz-linux`).
     Arch,
+    /// Debian and Ubuntu live/install media (`casper/`, `install.amd/`, `live/`).
     Debian,
+    /// Fedora install media (`images/pxeboot/`).
     Fedora,
+    /// RHEL / Rocky / AlmaLinux — same `images/pxeboot` layout as Fedora
+    /// but a distinct signing CA and stricter lockdown kexec policy.
+    RedHat,
+    /// Alpine Linux (`boot/vmlinuz-lts`).
+    Alpine,
+    /// NixOS install media (`boot/bzImage`).
+    NixOS,
+    /// Layout not recognized.
     Unknown,
 }
 
 impl Distribution {
-    /// Detect distribution from directory structure
+    /// Detect distribution from a kernel path observed inside an ISO.
+    #[must_use]
     pub fn from_paths(kernel_path: &std::path::Path) -> Self {
         let path_str = kernel_path.to_string_lossy().to_lowercase();
 
-        // Note: parentheses matter here due to operator precedence
-        if path_str.contains("arch")
-            || (path_str.contains("boot")
-                && !path_str.contains("efi")
-                && !path_str.contains("images"))
+        // Specific signals first — RHEL/Rocky/Alma carry distinctive markers in
+        // their ISO volume labels and filenames, but at this path-only layer
+        // we can't disambiguate from Fedora. Keep them separate variants; the
+        // caller can upgrade detection once volume-label sniffing is added.
+        if path_str.contains("nixos") || path_str.ends_with("bzimage") {
+            Distribution::NixOS
+        } else if path_str.contains("alpine") || path_str.contains("vmlinuz-lts") {
+            Distribution::Alpine
+        } else if path_str.contains("rhel")
+            || path_str.contains("rocky")
+            || path_str.contains("almalinux")
+            || path_str.contains("centos")
         {
-            Distribution::Arch
-        } else if path_str.contains("debian")
-            || path_str.contains("ubuntu")
-            || path_str.contains("casper")
-        {
-            Distribution::Debian
+            Distribution::RedHat
         } else if path_str.contains("fedora")
             || path_str.contains("images")
             || path_str.contains("pxeboot")
         {
             Distribution::Fedora
+        } else if path_str.contains("debian")
+            || path_str.contains("ubuntu")
+            || path_str.contains("casper")
+        {
+            Distribution::Debian
+        } else if path_str.contains("arch")
+            || (path_str.contains("boot")
+                && !path_str.contains("efi")
+                && !path_str.contains("images"))
+        {
+            Distribution::Arch
         } else {
             Distribution::Unknown
         }
@@ -753,6 +786,11 @@ mod tests {
                         MockEntry::File,
                     );
                 }
+                // New variants reuse existing mock fixtures by analogue
+                // (Alpine + NixOS behave like Arch at the path layer; RedHat
+                // like Fedora). The scan_directory tests only care about the
+                // 3 original categories, so nothing new to stage here.
+                Distribution::RedHat | Distribution::Alpine | Distribution::NixOS => {}
                 Distribution::Unknown => {}
             }
 

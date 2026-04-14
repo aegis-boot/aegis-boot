@@ -8,16 +8,17 @@ This matrix is the ground truth for `iso-probe`'s quirk annotations. Each row re
 
 ## Summary
 
-| Distribution  | Boot layout                      | Kernel signed by           | `KEXEC_SIG` | Quirks                                   |
-|---------------|----------------------------------|----------------------------|-------------|------------------------------------------|
-| **Ubuntu**    | `casper/vmlinuz` + `casper/initrd` | Canonical UEFI CA        | accepts     | (none known)                             |
-| **Debian**    | `install.amd/vmlinuz` + `live/initrd` | Debian UEFI CA        | accepts     | (none known)                             |
-| **Fedora**    | `images/pxeboot/vmlinuz`         | Fedora UEFI CA             | accepts     | `CrossDistroKexecRefused`                |
-| **Arch**      | `arch/boot/x86_64/vmlinuz-linux` | **unsigned** (default)     | rejects     | `UnsignedKernel`                         |
-| **Alpine**    | `boot/vmlinuz-lts`               | **unsigned** (default)     | rejects     | `UnsignedKernel` (enum: `Unknown`)       |
-| **NixOS**     | `boot/bzImage`                   | **unsigned** (default)     | rejects     | `UnsignedKernel` (enum: `Unknown`)       |
+| Distribution         | Boot layout                          | Kernel signed by           | `KEXEC_SIG` | Quirks                                   |
+|----------------------|--------------------------------------|----------------------------|-------------|------------------------------------------|
+| **Ubuntu**           | `casper/vmlinuz` + `casper/initrd`   | Canonical UEFI CA          | accepts     | (none known)                             |
+| **Debian**           | `install.amd/vmlinuz` + `live/initrd` | Debian UEFI CA            | accepts     | (none known)                             |
+| **Fedora**           | `images/pxeboot/vmlinuz`             | Fedora UEFI CA             | accepts     | `CrossDistroKexecRefused`                |
+| **RHEL / Rocky / Alma** | `images/pxeboot/vmlinuz`          | Red Hat / Rocky / Alma CA  | accepts (same CA); rejects cross-vendor | `CrossDistroKexecRefused` |
+| **Arch**             | `arch/boot/x86_64/vmlinuz-linux`     | **unsigned** (default)     | rejects     | `UnsignedKernel`                         |
+| **Alpine**           | `boot/vmlinuz-lts`                   | **unsigned** (default)     | rejects     | `UnsignedKernel`                         |
+| **NixOS**            | `boot/bzImage`                       | **unsigned** (default)     | rejects     | `UnsignedKernel`                         |
 
-`Distribution` enum coverage in v0.1.0: `Debian`, `Fedora`, `Arch`, `Unknown`. Alpine and NixOS layouts are detected as `Unknown` and inherit the conservative default. Extending the enum to name them is tracked as future work.
+`Distribution` enum coverage (v0.1.1+): `Debian`, `Fedora`, `RedHat`, `Arch`, `Alpine`, `NixOS`, `Unknown`. Detection runs specific-first (Alpine / NixOS / RHEL markers) then falls back to the broader families.
 
 ## Detailed entries
 
@@ -57,20 +58,27 @@ This matrix is the ground truth for `iso-probe`'s quirk annotations. Each row re
 - **Known quirk — `UnsignedKernel`:** Arch install media does **not** carry a signed EFI executable chain by default. There is no shim-review-board-approved shim for Arch; the kernel itself is unsigned relative to the Microsoft UEFI CA. Under Secure Boot, `kexec_file_load` returns `EKEYREJECTED`.
 - **Remedy surfaced by TUI:** enroll the Arch signing key via `mokutil --import` and reboot; `aegis-boot` never suggests disabling Secure Boot.
 
+### RHEL / Rocky Linux / AlmaLinux
+
+- **ISO family:** `Rocky-9.*-x86_64-minimal.iso`, `AlmaLinux-9.*-x86_64-minimal.iso`, `rhel-9.*-x86_64-dvd.iso`
+- **Layout:** same `images/pxeboot/vmlinuz` as Fedora (shared Anaconda installer).
+- **Known quirk — `CrossDistroKexecRefused`:** inherited from the Fedora analysis; RHEL lockdown rejects non-RH-family-signed kexec targets even when `KEXEC_SIG` would accept.
+- **Detection:** by ISO path markers (`rhel`, `rocky`, `almalinux`, `centos`). Falls back to `Fedora` if no markers are present, which applies the same quirk.
+
 ### Alpine Linux
 
 - **ISO family:** `alpine-standard-*-x86_64.iso`
 - **Layout:** `boot/vmlinuz-lts` + `boot/initramfs-lts`.
-- **Detected as:** `Distribution::Unknown` (the current `iso-parser` detector doesn't name Alpine; future work).
-- **Quirk inheritance:** `UnsignedKernel` via the `Unknown` default.
+- **Detection:** named `Distribution::Alpine` since v0.1.1.
+- **Quirk:** `UnsignedKernel`.
 - **Reality:** Alpine's standard ISOs are unsigned against the Microsoft UEFI chain. Alpine distributes UEFI-capable images, but without shim review-board membership. Same MOK remedy as Arch.
 
 ### NixOS
 
 - **ISO family:** `nixos-*-minimal-x86_64-linux.iso`
 - **Layout:** `boot/bzImage` + generation-specific initrd path.
-- **Detected as:** `Distribution::Unknown`.
-- **Quirk inheritance:** `UnsignedKernel`.
+- **Detection:** named `Distribution::NixOS` since v0.1.1 (via `nixos` in path or `bzImage` suffix).
+- **Quirk:** `UnsignedKernel`.
 - **Reality:** NixOS's default ISO builder does not produce a signed chain. Users can build custom SB-enabled images; those would flip this row to "signed" but require project-specific provenance to auto-detect.
 
 ## Out of the matrix (explicitly)
