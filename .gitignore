@@ -1,0 +1,23 @@
+# Rust build artifacts
+target/
+**/target/
+Cargo.lock
+
+# Docker / build outputs
+*.sha256
+build-image.tar
+build*.tar
+build*.sha256
+
+# Environment
+.env
+.env.local
+
+# Editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Logs
+*.log

@@ -1,0 +1,55 @@
+name: Reproducible Build Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  reproducible-build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Pass 1 - First build
+        run: |
+          docker build -t nexus-build:pass1 -f Dockerfile.locked .
+          docker save nexus-build:pass1 | sha256sum > build1.sha256
+
+      - name: Build Pass 2 - Second build
+        run: |
+          docker build -t nexus-build:pass2 -f Dockerfile.locked .
+          docker save nexus-build:pass2 | sha256sum > build2.sha256
+
+      - name: Compare cryptographic hashes
+        run: |
+          if diff build1.sha256 build2.sha256; then
+            echo "✅ Build is reproducible - hashes match"
+            exit 0
+          else
+            echo "❌ Build is NOT reproducible - hashes differ"
+            echo "=== Pass 1 Hash ==="
+            cat build1.sha256
+            echo "=== Pass 2 Hash ==="
+            cat build2.sha256
+            exit 1
+          fi
+
+      - name: Upload verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-hashes
+          path: |
+            build1.sha256
+            build2.sha256
+          retention-days: 30

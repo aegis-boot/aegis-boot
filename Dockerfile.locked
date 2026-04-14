@@ -1,0 +1,44 @@
+FROM ubuntu:22.04@sha256:149d67f5f652ff5c4a5f77609e5e3d1c3c72d4f8a4bb7a9e1e3c0c8d6f5a4b3c
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    wget \
+    git \
+    ca-certificates \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/opt/rust/rustup
+ENV CARGO_HOME=/opt/rust/cargo
+ENV RUST_VERSION=1.75.0
+ENV RUST_TOOLCHAIN=stable
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${RUST_VERSION}
+ENV PATH="${CARGO_HOME}/bin:${PATH}"
+
+ENV UEFI_SDK_VERSION=edk2-stable202311
+ENV UEFI_SDK_HOME=/opt/uefi/edk2
+
+RUN git clone --depth 1 --branch ${UEFI_SDK_VERSION} \
+    https://github.com/tianocore/edk2.git ${UEFI_SDK_HOME} && \
+    git -C ${UEFI_SDK_HOME} submodule update --init --recursive
+
+ENV PYTHON3=python3
+ENV PIP_VERSION=24.0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    python3-venv \
+    nasm \
+    uuid-dev \
+    iasl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir --break-system-packages pyyaml==6.0.1
+
+WORKDIR /build
