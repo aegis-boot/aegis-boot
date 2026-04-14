@@ -87,11 +87,17 @@ trap 'rm -rf -- "$WORK"' EXIT
 cat "$INITRD" "$OUT_DIR/initramfs.cpio.gz" > "$WORK/combined.img"
 log "combined initrd: $(stat -c '%s' "$WORK/combined.img") bytes"
 
-# Build minimal grub.cfg.
+# Build minimal grub.cfg. Critical bits:
+#   - serial console setup so grub itself talks to ttyS0, not graphics
+#   - 'linux' (not 'linuxefi') because Canonical-signed grub uses linux
+#   - timeout=0 to skip the menu and boot immediately
 cat > "$WORK/grub.cfg" <<'EOF'
-set timeout=0
+serial --unit=0 --speed=115200
+terminal_input serial console
+terminal_output serial console
+set timeout=1
 menuentry "aegis-boot e2e" {
-    linux /vmlinuz console=ttyS0 panic=5 loglevel=4 quiet
+    linux /vmlinuz console=ttyS0,115200 panic=5 loglevel=7
     initrd /initrd.img
 }
 EOF
@@ -102,9 +108,13 @@ ESP_IMG="$WORK/esp.img"
 dd if=/dev/zero of="$ESP_IMG" bs=1M count="$ESP_SIZE_MB" status=none
 mkfs.vfat -F 32 -n AEGIS_ESP "$ESP_IMG" >/dev/null
 
-mmd -i "$ESP_IMG" ::/EFI ::/EFI/BOOT
+mmd -i "$ESP_IMG" ::/EFI ::/EFI/BOOT ::/EFI/ubuntu
 mcopy -i "$ESP_IMG" "$SHIM_SRC" ::/EFI/BOOT/BOOTX64.EFI
 mcopy -i "$ESP_IMG" "$GRUB_SRC" ::/EFI/BOOT/grubx64.efi
+# Canonical's signed grub looks for its config in /EFI/ubuntu/grub.cfg.
+# Put it there as the canonical home; also drop a copy in /EFI/BOOT for
+# generic-shim path completeness.
+mcopy -i "$ESP_IMG" "$WORK/grub.cfg" ::/EFI/ubuntu/grub.cfg
 mcopy -i "$ESP_IMG" "$WORK/grub.cfg" ::/EFI/BOOT/grub.cfg
 mcopy -i "$ESP_IMG" "$KERNEL" ::/vmlinuz
 mcopy -i "$ESP_IMG" "$WORK/combined.img" ::/initrd.img
