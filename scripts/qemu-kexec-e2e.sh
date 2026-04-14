@@ -101,10 +101,12 @@ set -e
 /bin/mount -t sysfs sys   /sys
 /bin/mount -t devtmpfs dev /dev 2>/dev/null || /bin/mount -t tmpfs tmpfs /dev
 /bin/mount -t tmpfs  run   /run
+/bin/mkdir -p /var/aegis
+/bin/mount -t tmpfs tmpfs /var/aegis
 /bin/sleep 1
 
 # Find the attached ISO. QEMU attaches it as /dev/sr0 (when using
-# if=ide,media=cdrom) or /dev/vda (virtio-blk).
+# -cdrom) or /dev/vda (virtio-blk).
 ISO_DEV=""
 for candidate in /dev/sr0 /dev/vda /dev/sda; do
     if [ -b "$candidate" ]; then
@@ -118,13 +120,13 @@ if [ -z "$ISO_DEV" ]; then
     exec /bin/sh
 fi
 
-/bin/echo "aegis-kexec-e2e: ISO device = $ISO_DEV"
-/bin/mkdir -p /var/aegis /mnt/iso
-
-# iso-probe's discover() walks the root and looks for *.iso files.
-# Expose the attached block device AS a file under /var/aegis — the
-# probe will then loop-mount it and find casper/.
-/bin/ln -s "$ISO_DEV" /var/aegis/fixture.iso
+/bin/echo "aegis-kexec-e2e: ISO device = $ISO_DEV, copying to tmpfs"
+# iso-parser's mount_iso expects a regular file path (so `mount -o loop`
+# can set up a loop device). A symlink to /dev/sr0 won't work — mount
+# skips losetup for block devices and our discover() needs the iso as a
+# file that can be walked. Copy the raw ISO bytes onto tmpfs.
+/bin/cat "$ISO_DEV" > /var/aegis/fixture.iso
+/bin/echo "aegis-kexec-e2e: ISO copied: $(/bin/ls -l /var/aegis/fixture.iso)"
 
 export AEGIS_ISO_ROOTS=/var/aegis
 export AEGIS_AUTO_KEXEC=fixture.iso
@@ -155,7 +157,7 @@ set +e
 timeout "$TIMEOUT_SECONDS" qemu-system-x86_64 \
     -nographic \
     -no-reboot \
-    -m 1024M \
+    -m 2048M \
     -kernel "$KERNEL" \
     -initrd "$WORK/initramfs-with-fixture.cpio.gz" \
     -cdrom "$FIXTURE_ISO" \
