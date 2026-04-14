@@ -10,6 +10,10 @@ on:
 jobs:
   reproducible-build:
     runs-on: ubuntu-22.04
+    # Known issue #2: EDK II stable202311 references Zeex/subhook submodule which
+    # is unreachable upstream (breaks reproducibility guarantee).
+    # continue-on-error until EDK II pin is updated or submodules vendored.
+    continue-on-error: true
     permissions:
       contents: read
 

@@ -25,7 +25,7 @@
             python311Packages.pip
             nasm
             util-linux
-            iasl
+            acpica-tools
             git
           ];
 
