@@ -1,0 +1,37 @@
+name: OVMF SecBoot
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Phase 1 of issue #16: validate the OVMF SecBoot environment in CI by
+# launching QEMU with the MS-enrolled Ubuntu OVMF variables and asserting
+# the firmware loads cleanly. Phase 2 (real signed shim+kernel chain) is
+# tracked separately.
+
+jobs:
+  ovmf-secboot-foundation:
+    name: OVMF SecBoot foundation
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU + OVMF (with MS-enrolled vars)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf
+          ls -l /usr/share/OVMF/OVMF_CODE_4M.secboot.fd \
+                /usr/share/OVMF/OVMF_VARS_4M.ms.fd
+
+      - name: Run OVMF SecBoot foundation smoke
+        env:
+          TIMEOUT_SECONDS: "30"
+        run: ./scripts/ovmf-secboot-smoke.sh
