@@ -1,0 +1,46 @@
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  iso-probe-mount:
+    name: iso-probe loop-mount integration
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    env:
+      AEGIS_INTEGRATION_ROOT: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build + fixture tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xorriso
+
+      - name: Install Rust toolchain (pinned)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain 1.85.0 --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Check loop devices are available
+        run: |
+          # On GHA runners the loop driver is built into the kernel, so
+          # `lsmod` won't show it. Check for the control device instead.
+          sudo modprobe loop 2>/dev/null || true
+          if [ ! -c /dev/loop-control ]; then
+            echo "::warning::/dev/loop-control missing; skipping integration test"
+            echo "SKIP_INTEGRATION=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run ignored integration tests
+        if: env.SKIP_INTEGRATION != '1'
+        run: |
+          sudo -E "$HOME/.cargo/bin/cargo" test -p iso-probe --release -- --ignored --nocapture
