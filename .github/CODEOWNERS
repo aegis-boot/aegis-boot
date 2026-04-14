@@ -1,0 +1,10 @@
+# Default owner for everything
+*                       @williamzujkowski
+
+# Security-critical: require explicit review
+/THREAT_MODEL.md        @williamzujkowski
+/SECURITY.md            @williamzujkowski
+/Dockerfile.locked      @williamzujkowski
+/flake.nix              @williamzujkowski
+/.github/workflows/     @williamzujkowski
+/crates/iso-parser/     @williamzujkowski

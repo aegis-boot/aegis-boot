@@ -45,7 +45,7 @@ The following dependencies are pinned in `Dockerfile.locked`:
 | Component | Version      | Pin Method              |
 | --------- | ------------ | ----------------------- |
 | Ubuntu    | 22.04        | SHA256 digest           |
-| Rust      | 1.75.0       | Exact version in rustup |
+| Rust      | 1.85.0       | Exact version in rustup (edition2024 required by transitive deps) |
 | EDK II    | stable202311 | Git tag                 |
 | Python    | 3.10+        | System package          |
 | pip       | 24.0.1       | Exact version           |

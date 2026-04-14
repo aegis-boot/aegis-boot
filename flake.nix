@@ -33,7 +33,7 @@
             git
           ];
 
-          RUST_VERSION = "1.75.0";
+          RUST_VERSION = "1.85.0";
 
           shellHook = ''
             echo "Aegis-Boot Build Environment"
