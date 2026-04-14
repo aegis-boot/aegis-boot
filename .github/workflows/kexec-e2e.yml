@@ -1,0 +1,54 @@
+name: kexec E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Proves the rescue-tui -> target-kernel kexec handoff works end-to-end.
+# Complements the OVMF SecBoot E2E: that test proves signed-chain ->
+# rescue-tui; this one proves rescue-tui -> kexec -> target kernel.
+
+jobs:
+  kexec-e2e:
+    name: kexec E2E (rescue-tui -> target kernel)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    timeout-minutes: 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install runtime + fixture-build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            linux-image-generic \
+            busybox-static cpio \
+            xorriso
+          sudo chmod 0644 /boot/vmlinuz-*-generic /boot/initrd.img-*-generic || true
+
+      - name: Install Rust toolchain (pinned)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain 1.85.0 --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build rescue-tui (release)
+        env:
+          SOURCE_DATE_EPOCH: "1700000000"
+        run: cargo build --release -p rescue-tui
+
+      - name: Build base initramfs
+        env:
+          SOURCE_DATE_EPOCH: "1700000000"
+        run: ./scripts/build-initramfs.sh
+
+      - name: Run kexec E2E
+        env:
+          TIMEOUT_SECONDS: "180"
+        run: ./scripts/qemu-kexec-e2e.sh
