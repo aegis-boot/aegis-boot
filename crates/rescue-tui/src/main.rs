@@ -110,6 +110,19 @@ fn run(roots: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = AppState::new(isos);
     apply_persisted_choice(&mut state);
 
+    // Non-interactive automation mode. When AEGIS_AUTO_KEXEC is set to a
+    // substring match against ISO paths, rescue-tui skips the TUI entirely
+    // and kexecs the first matching ISO. Exit codes:
+    //   0  — should be unreachable; load_and_exec replaces the process
+    //   2  — no ISO matched the substring
+    //   3  — kexec failed (classified error in the log)
+    // This is intentionally not a full scripting interface — just enough to
+    // support CI end-to-end testing without a TTY. Real operator automation
+    // should live outside the TUI binary.
+    if let Ok(needle) = env::var("AEGIS_AUTO_KEXEC") {
+        return run_auto_kexec(&state, &needle);
+    }
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -187,6 +200,52 @@ fn event_loop<B: ratatui::backend::Backend>(
             _ => {}
         }
     }
+}
+
+/// Non-interactive kexec path for automation. Matches the first ISO whose
+/// path contains `needle` (substring match on the absolute path), then calls
+/// `attempt_kexec`. Returns a meaningful exit code so CI can assert.
+fn run_auto_kexec(
+    state: &AppState,
+    needle: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!(needle, "AEGIS_AUTO_KEXEC mode");
+    let Some(idx) = state
+        .isos
+        .iter()
+        .position(|iso| iso.iso_path.to_string_lossy().contains(needle))
+    else {
+        tracing::error!(
+            needle,
+            "AEGIS_AUTO_KEXEC: no ISO path matched substring"
+        );
+        return Err(format!("AEGIS_AUTO_KEXEC: no match for '{needle}'").into());
+    };
+    let Some(iso) = state.isos.get(idx).cloned() else {
+        return Err("AEGIS_AUTO_KEXEC: index out of range".into());
+    };
+    tracing::info!(
+        iso = %iso.iso_path.display(),
+        idx,
+        "AEGIS_AUTO_KEXEC: matched ISO, invoking kexec"
+    );
+    // Mirror attempt_kexec but without the state mutation — we're not
+    // coming back from load_and_exec on success.
+    let prepared = iso_probe::prepare(&iso)?;
+    let cmdline = state
+        .cmdline_overrides
+        .get(&idx)
+        .cloned()
+        .or_else(|| prepared.cmdline.clone())
+        .unwrap_or_default();
+    let req = kexec_loader::KexecRequest {
+        kernel: prepared.kernel.clone(),
+        initrd: prepared.initrd.clone(),
+        cmdline,
+    };
+    kexec_loader::load_and_exec(&req)
+        .map(|_infallible| ())
+        .map_err(|e| format!("kexec failed: {e}").into())
 }
 
 /// Apply any saved last-choice to the freshly-built [`AppState`]: pre-select
