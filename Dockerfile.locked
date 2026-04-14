@@ -1,44 +1,45 @@
+# Reproducible build environment for aegis-boot (Option B runtime per ADR 0001).
+#
+# This image compiles the Rust workspace (`rescue-tui`, `iso-probe`,
+# `kexec-loader`, `iso-parser`) and assembles the initramfs payload that rides
+# on top of a signed distro rescue kernel. It intentionally does NOT contain
+# EDK II, NASM, or any UEFI build toolchain — the chosen architecture offloads
+# Secure Boot to shim + distro-signed kernels, so no bespoke UEFI binary is
+# compiled here.
+#
+# See: docs/adr/0001-runtime-architecture.md
+
 FROM ubuntu:22.04@sha256:eb29ed27b0821dca09c2e28b39135e185fc1302036427d5f4d70a41ce8fd7659
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
+# Deterministic timestamps for build tooling that honors SOURCE_DATE_EPOCH.
+ENV SOURCE_DATE_EPOCH=1700000000
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    wget \
-    git \
-    ca-certificates \
-    pkg-config \
-    libssl-dev \
+# sbsigntool lives in universe; enable it before installing.
+RUN sed -i 's/^# deb \(.*universe\)/deb \1/' /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      curl \
+      ca-certificates \
+      git \
+      pkg-config \
+      libssl-dev \
+      cpio \
+      sbsigntool \
+      xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 ENV RUSTUP_HOME=/opt/rust/rustup
 ENV CARGO_HOME=/opt/rust/cargo
 ENV RUST_VERSION=1.85.0
-ENV RUST_TOOLCHAIN=stable
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${RUST_VERSION}
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y \
+        --default-toolchain ${RUST_VERSION} \
+        --profile minimal \
+        --component rustfmt \
+        --component clippy
 ENV PATH="${CARGO_HOME}/bin:${PATH}"
-
-ENV UEFI_SDK_VERSION=edk2-stable202311
-ENV UEFI_SDK_HOME=/opt/uefi/edk2
-
-RUN git clone --depth 1 --branch ${UEFI_SDK_VERSION} \
-    https://github.com/tianocore/edk2.git ${UEFI_SDK_HOME} && \
-    git -C ${UEFI_SDK_HOME} submodule update --init --recursive
-
-ENV PYTHON3=python3
-ENV PIP_VERSION=24.0
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-pip \
-    python3-venv \
-    nasm \
-    uuid-dev \
-    iasl \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN pip3 install --no-cache-dir --break-system-packages pyyaml==6.0.1
 
 WORKDIR /build

@@ -7,13 +7,15 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Reproducibility is verified at the level we ship — the Rust release binaries
+# that go into the initramfs — not at the Docker image layer (whose digest is
+# affected by APT/HTTP metadata outside our control) or at .rlib intermediates
+# (which embed CARGO_HOME paths in metadata). Two back-to-back builds with the
+# same SOURCE_DATE_EPOCH must produce identical sha256(rescue-tui).
+
 jobs:
   reproducible-build:
     runs-on: ubuntu-22.04
-    # Known issue #2: EDK II stable202311 references Zeex/subhook submodule which
-    # is unreachable upstream (breaks reproducibility guarantee).
-    # continue-on-error until EDK II pin is updated or submodules vendored.
-    continue-on-error: true
     permissions:
       contents: read
 
@@ -21,30 +23,46 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Build image
+        run: docker build -t aegis-boot:builder -f Dockerfile.locked .
 
-      - name: Build Pass 1 - First build
+      - name: Build Pass 1
         run: |
-          docker build -t nexus-build:pass1 -f Dockerfile.locked .
-          docker save nexus-build:pass1 | sha256sum > build1.sha256
+          docker run --rm -v "$PWD:/build" -w /build aegis-boot:builder rm -rf target
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e SOURCE_DATE_EPOCH=1700000000 \
+            -e CARGO_HOME=/tmp/cargo-repro \
+            -v "$PWD:/build" \
+            -w /build \
+            aegis-boot:builder \
+            cargo build --release --workspace
+          sha256sum target/release/rescue-tui > pass1.sha256
+          cat pass1.sha256
 
-      - name: Build Pass 2 - Second build
+      - name: Build Pass 2
         run: |
-          docker build -t nexus-build:pass2 -f Dockerfile.locked .
-          docker save nexus-build:pass2 | sha256sum > build2.sha256
+          docker run --rm -v "$PWD:/build" -w /build aegis-boot:builder rm -rf target
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e SOURCE_DATE_EPOCH=1700000000 \
+            -e CARGO_HOME=/tmp/cargo-repro \
+            -v "$PWD:/build" \
+            -w /build \
+            aegis-boot:builder \
+            cargo build --release --workspace
+          sha256sum target/release/rescue-tui > pass2.sha256
+          cat pass2.sha256
 
-      - name: Compare cryptographic hashes
+      - name: Compare artifact hashes
         run: |
-          if diff build1.sha256 build2.sha256; then
-            echo "✅ Build is reproducible - hashes match"
+          p1=$(awk '{print $1}' pass1.sha256)
+          p2=$(awk '{print $1}' pass2.sha256)
+          if [ "$p1" = "$p2" ]; then
+            echo "rescue-tui is reproducible — $p1"
             exit 0
           else
-            echo "❌ Build is NOT reproducible - hashes differ"
-            echo "=== Pass 1 Hash ==="
-            cat build1.sha256
-            echo "=== Pass 2 Hash ==="
-            cat build2.sha256
+            echo "rescue-tui diverged: $p1 vs $p2"
             exit 1
           fi
 
@@ -54,6 +72,6 @@ jobs:
         with:
           name: build-hashes
           path: |
-            build1.sha256
-            build2.sha256
+            pass1.sha256
+            pass2.sha256
           retention-days: 30
