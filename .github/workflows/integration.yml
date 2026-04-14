@@ -30,14 +30,17 @@ jobs:
             | sh -s -- -y --default-toolchain 1.85.0 --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Check kernel loop module is available
+      - name: Check loop devices are available
         run: |
-          sudo modprobe loop || true
-          lsmod | grep -E '^loop' || {
-            echo "loop module not available on this runner"
-            exit 78  # neutral exit — skip, don't fail
-          }
+          # On GHA runners the loop driver is built into the kernel, so
+          # `lsmod` won't show it. Check for the control device instead.
+          sudo modprobe loop 2>/dev/null || true
+          if [ ! -c /dev/loop-control ]; then
+            echo "::warning::/dev/loop-control missing; skipping integration test"
+            echo "SKIP_INTEGRATION=1" >> "$GITHUB_ENV"
+          fi
 
       - name: Run ignored integration tests
+        if: env.SKIP_INTEGRATION != '1'
         run: |
           sudo -E "$HOME/.cargo/bin/cargo" test -p iso-probe --release -- --ignored --nocapture
