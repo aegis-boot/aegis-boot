@@ -34,7 +34,10 @@ jobs:
             mtools dosfstools gdisk \
             busybox-static cpio
           # Kernels mode 0600; we need them readable for mcopy.
-          sudo chmod 0644 /boot/vmlinuz-*-virtual /boot/initrd.img-*-virtual
+          # linux-image-virtual is a meta-package that pulls -generic on
+          # modern Ubuntu; chmod all vmlinuz+initrd files conservatively.
+          sudo chmod 0644 /boot/vmlinuz-* /boot/initrd.img-* 2>/dev/null || true
+          ls -l /boot/vmlinuz-* /boot/initrd.img-*
 
       - name: Install Rust toolchain (pinned)
         run: |
