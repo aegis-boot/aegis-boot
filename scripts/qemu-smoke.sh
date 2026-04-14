@@ -107,8 +107,9 @@ echo "--- QEMU serial output ---"
 cat "$output_file"
 echo "--- end QEMU serial output ---"
 
-# Look for either the empty-state text (no ISOs) or the title bar.
-if grep -qE 'No bootable ISOs|aegis-boot' "$output_file"; then
+# Look for our startup banner (stderr → serial console) — reliable even
+# when the serial TTY doesn't report a size and ratatui renders blank.
+if grep -qE 'aegis-boot rescue-tui starting|No bootable ISOs|aegis-boot — pick an ISO' "$output_file"; then
     log "rescue-tui rendered — boot smoke PASSED"
     exit 0
 fi
