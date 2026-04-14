@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
@@ -44,7 +47,6 @@ jobs:
         with:
           manifest-path: crates/iso-parser/Cargo.toml
           command: check
-          arguments: --config ../../deny.toml
 
   sbom:
     name: Generate CycloneDX SBOM
@@ -57,13 +59,14 @@ jobs:
         run: cargo install cargo-cyclonedx --locked --version 0.5.7
       - name: Generate SBOM
         working-directory: crates/iso-parser
-        run: cargo cyclonedx --format json --output-cdx
+        run: cargo cyclonedx --format json
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
         with:
           name: sbom-cyclonedx
-          path: crates/iso-parser/**/bom.json
+          path: crates/iso-parser/**/*.cdx.json
           retention-days: 90
+          if-no-files-found: error
 
   secrets:
     name: Secret scanning (gitleaks)
@@ -72,9 +75,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar -xz -C /tmp
+          sudo mv /tmp/gitleaks /usr/local/bin/
+      - name: Run gitleaks
+        run: gitleaks detect --source . --verbose --redact --exit-code 1
 
   sast:
     name: SAST (semgrep p/rust)

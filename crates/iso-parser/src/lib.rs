@@ -787,7 +787,8 @@ mod tests {
         fn metadata(&self, path: &std::path::Path) -> std::io::Result<std::fs::Metadata> {
             // Mock doesn't actually need real metadata - return success for existing files
             if self.files.contains_key(path) {
-                // Use temp dir as a workaround to get valid metadata
+                // Mock-only: returns metadata of a path guaranteed to exist for test plumbing.
+                // nosemgrep: rust.lang.security.temp-dir.temp-dir
                 std::fs::metadata(std::env::temp_dir())
             } else {
                 Err(std::io::Error::new(
