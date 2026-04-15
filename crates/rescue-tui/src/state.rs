@@ -743,6 +743,54 @@ impl AppState {
         }
     }
 
+    /// Produce a plain-text evidence snapshot of the current Error
+    /// screen suitable for writing to the `AEGIS_ISOS` data partition.
+    /// memtest86+-style "one frame = one bug report," serialized.
+    /// (#92)
+    #[must_use]
+    pub fn error_evidence_text(&self) -> Option<String> {
+        use std::fmt::Write as _;
+        let (msg, remedy, return_to) = match &self.screen {
+            Screen::Error {
+                message,
+                remedy,
+                return_to,
+            } => (message.clone(), remedy.clone(), *return_to),
+            _ => return None,
+        };
+        let iso = self.isos.get(return_to)?;
+        let cmdline = self.effective_cmdline(return_to);
+        let mut body = String::new();
+        body.push_str("aegis-boot kexec-failure evidence\n");
+        body.push_str("=================================\n\n");
+        let _ = writeln!(body, "Diagnostic: {msg}");
+        if let Some(r) = remedy {
+            let _ = writeln!(body, "Remedy:     {r}");
+        }
+        body.push('\n');
+        let _ = writeln!(body, "Version:    aegis-boot v{}", env!("CARGO_PKG_VERSION"));
+        let _ = writeln!(
+            body,
+            "SB / TPM:   {}  ·  {}",
+            self.secure_boot.summary(),
+            self.tpm.summary()
+        );
+        let _ = writeln!(body, "ISO label:  {}", iso.label);
+        let _ = writeln!(body, "ISO path:   {}", iso.iso_path.display());
+        let _ = writeln!(body, "Size:       {:?}", iso.size_bytes);
+        let _ = writeln!(body, "Distribution: {:?}", iso.distribution);
+        let _ = writeln!(body, "Quirks:     {:?}", iso.quirks);
+        let _ = writeln!(body, "Hash state: {:?}", iso.hash_verification);
+        let _ = writeln!(body, "Sig state:  {:?}", iso.signature_verification);
+        let cmdline_display = if cmdline.is_empty() {
+            "(none)"
+        } else {
+            &cmdline
+        };
+        let _ = writeln!(body, "Cmdline:    {cmdline_display}");
+        Some(body)
+    }
+
     /// Cancel an in-progress verification (Esc). Dismisses the
     /// Verifying screen without updating the iso. The worker thread
     /// continues in the background; its result is discarded.
@@ -1321,6 +1369,27 @@ mod tests {
         };
         let s = AppState::new(vec![iso]);
         assert!(!s.is_degraded_trust(0));
+    }
+
+    // --- one-frame error evidence (#92) -------------------------------
+
+    #[test]
+    fn error_evidence_text_populated_after_kexec_error() {
+        let mut s = AppState::new(vec![fake_iso("ubuntu-24.04")]);
+        s.confirm_selection();
+        s.record_kexec_error(&KexecError::SignatureRejected);
+        let Some(text) = s.error_evidence_text() else {
+            panic!("evidence populated on Error");
+        };
+        assert!(text.contains("aegis-boot kexec-failure evidence"));
+        assert!(text.contains("ubuntu-24.04"));
+        assert!(text.contains("Diagnostic:"));
+    }
+
+    #[test]
+    fn error_evidence_text_none_when_not_error_screen() {
+        let s = AppState::new(vec![fake_iso("a")]);
+        assert!(s.error_evidence_text().is_none());
     }
 
     // --- verify-now (#89) ---------------------------------------------

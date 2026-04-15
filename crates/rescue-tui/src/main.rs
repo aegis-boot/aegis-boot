@@ -367,6 +367,25 @@ fn event_loop<B: ratatui::backend::Backend>(
             (Screen::EditCmdline { .. }, KeyCode::Backspace) => state.cmdline_backspace(),
             (Screen::EditCmdline { .. }, KeyCode::Char(c)) => state.cmdline_insert(c),
 
+            // F10 on Error → tee the one-frame evidence to
+            // /run/media/aegis-isos/aegis-log-<ts>.txt so the
+            // operator can pull it off the stick from any machine
+            // after reboot. rEFInd log-on-ESP pattern. (#92)
+            (Screen::Error { .. }, KeyCode::F(10)) => {
+                if let Some(text) = state.error_evidence_text() {
+                    match save_error_log(&text) {
+                        Ok(path) => tracing::info!(
+                            path = %path.display(),
+                            "operator saved error evidence via F10"
+                        ),
+                        Err(e) => tracing::warn!(
+                            error = %e,
+                            "F10 save-log failed (continuing)"
+                        ),
+                    }
+                }
+            }
+
             // Error → return to List, preserving the ISO that failed
             // so the operator doesn't have to re-navigate. (#85)
             (Screen::Error { return_to, .. }, _) => {
@@ -378,9 +397,36 @@ fn event_loop<B: ratatui::backend::Backend>(
     }
 }
 
-/// Find the first ISO whose path contains `needle` (substring match on the
-/// absolute path). Pure helper for `AEGIS_AUTO_KEXEC`; extracted for unit
-/// testing without spinning up QEMU. (#54)
+/// Write an error-screen evidence snapshot to the `AEGIS_ISOS` data
+/// partition so the operator can retrieve it after reboot. Best-effort
+/// — returns the path on success, an error message on failure.
+/// Location: first writable directory in `[/run/media/aegis-isos,
+/// /tmp]` with a timestamped filename. (#92)
+fn save_error_log(text: &str) -> Result<PathBuf, String> {
+    use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs();
+    let filename = format!("aegis-log-{ts}.txt");
+    for dir in ["/run/media/aegis-isos", "/tmp"] {
+        let dir_path = std::path::Path::new(dir);
+        if !dir_path.is_dir() {
+            continue;
+        }
+        let out = dir_path.join(&filename);
+        let Ok(mut f) = std::fs::File::create(&out) else {
+            continue;
+        };
+        if f.write_all(text.as_bytes()).is_err() {
+            continue;
+        }
+        return Ok(out);
+    }
+    Err("no writable target (tried /run/media/aegis-isos, /tmp)".into())
+}
+
 /// Message from the verify-now worker thread back to the event loop.
 /// The worker is fire-and-forget after cancel — the channel is dropped
 /// on the UI side and the thread exits when sends fail. (#89)
