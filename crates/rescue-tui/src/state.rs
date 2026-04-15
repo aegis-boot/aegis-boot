@@ -3,7 +3,7 @@
 //! Split from rendering so unit tests can cover every transition without a
 //! TTY or a `TestBackend`.
 
-use iso_probe::{DiscoveredIso, Quirk};
+use iso_probe::{DiscoveredIso, HashVerification, Quirk, SignatureVerification};
 use kexec_loader::KexecError;
 
 use crate::theme::Theme;
@@ -79,13 +79,32 @@ impl AppState {
     }
 
     /// Whether the ISO at `idx` carries a quirk that blocks kexec entirely
-    /// (e.g. Windows installers — wrong boot protocol). The TUI uses this
-    /// to disable the Enter binding on the Confirm screen.
+    /// (e.g. Windows installers — wrong boot protocol), OR the ISO failed
+    /// integrity verification (hash mismatch / forged signature). The TUI
+    /// uses this to disable the Enter binding on the Confirm screen.
+    ///
+    /// Hash and signature failures are enforced as hard blocks — the red
+    /// `✗ MISMATCH` / `✗ FORGED` indicator on the Confirm screen would
+    /// otherwise be advisory-only, which lets a physical-access attacker
+    /// boot a tampered ISO by clicking through the warning. (#55)
     #[must_use]
     pub fn is_kexec_blocked(&self, idx: usize) -> bool {
-        self.isos
-            .get(idx)
-            .is_some_and(|iso| iso.quirks.contains(&Quirk::NotKexecBootable))
+        let Some(iso) = self.isos.get(idx) else {
+            return false;
+        };
+        if iso.quirks.contains(&Quirk::NotKexecBootable) {
+            return true;
+        }
+        if matches!(iso.hash_verification, HashVerification::Mismatch { .. }) {
+            return true;
+        }
+        if matches!(
+            iso.signature_verification,
+            SignatureVerification::Forged { .. }
+        ) {
+            return true;
+        }
+        false
     }
 
     /// Transition confirm → edit-cmdline, seeding the buffer with whatever
@@ -548,6 +567,32 @@ mod tests {
     fn is_kexec_blocked_true_when_quirk_present() {
         let mut iso = fake_iso("windows");
         iso.quirks = vec![Quirk::NotKexecBootable];
+        let s = AppState::new(vec![iso]);
+        assert!(s.is_kexec_blocked(0));
+    }
+
+    #[test]
+    fn is_kexec_blocked_true_when_hash_mismatch() {
+        // A tampered ISO must not be kexec'd even if the operator clicks
+        // through the red ✗ MISMATCH warning. Regression for #55.
+        let mut iso = fake_iso("tampered");
+        iso.hash_verification = HashVerification::Mismatch {
+            expected: "abc".to_string(),
+            actual: "def".to_string(),
+            source: "/run/media/tampered.iso.sha256".to_string(),
+        };
+        let s = AppState::new(vec![iso]);
+        assert!(s.is_kexec_blocked(0));
+    }
+
+    #[test]
+    fn is_kexec_blocked_true_when_signature_forged() {
+        // A signature that fails crypto verification under a trusted key
+        // must not be kexec'd. Regression for #55.
+        let mut iso = fake_iso("forged");
+        iso.signature_verification = SignatureVerification::Forged {
+            sig_path: std::path::PathBuf::from("/run/media/forged.iso.minisig"),
+        };
         let s = AppState::new(vec![iso]);
         assert!(s.is_kexec_blocked(0));
     }
