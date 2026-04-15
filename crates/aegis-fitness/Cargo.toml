@@ -1,0 +1,26 @@
+[package]
+name = "aegis-fitness"
+version = "0.5.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Repo / build / artifact fitness audit for aegis-boot"
+
+[[bin]]
+name = "aegis-fitness"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = "1.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"

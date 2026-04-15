@@ -10,6 +10,7 @@
 #   5. ./scripts/mkusb.sh           (needs kernel read — sudo once)
 #   6. ./scripts/qemu-try.sh --headless (boots under OVMF SB)
 #   7. ./scripts/qemu-kexec-e2e.sh  (sudo for loop-mount + kexec)
+#   8. cargo run -p aegis-fitness   (repo + artifact health audit)
 #
 # Approx 6-8 minutes on a Framework laptop.
 #
@@ -68,24 +69,24 @@ fi
 
 export SOURCE_DATE_EPOCH=1700000000
 
-step "1/7 cargo fmt --check"
+step "1/8 cargo fmt --check"
 cargo fmt --all -- --check
 
-step "2/7 cargo clippy"
+step "2/8 cargo clippy"
 cargo clippy --workspace --all-targets -- -D warnings
 
-step "3/7 cargo test"
+step "3/8 cargo test"
 cargo test --workspace
 
-step "4/7 build-initramfs"
+step "4/8 build-initramfs"
 cargo build --release -p rescue-tui
 rm -rf out
 ./scripts/build-initramfs.sh
 
-step "5/7 mkusb"
+step "5/8 mkusb"
 DISK_SIZE_MB="${DISK_SIZE_MB:-1024}" ./scripts/mkusb.sh
 
-step "6/7 qemu-try (headless, 60s timeout)"
+step "6/8 qemu-try (headless, 60s timeout)"
 TIMEOUT_SECONDS=60 timeout 90 bash -c '
     cp /usr/share/OVMF/OVMF_VARS_4M.ms.fd /tmp/aegis-dev-vars.fd
     chmod 0644 /tmp/aegis-dev-vars.fd
@@ -107,12 +108,15 @@ else
     exit 1
 fi
 
-step "7/7 kexec E2E (sudo required for loop-mount)"
+step "7/8 kexec E2E (sudo required for loop-mount)"
 if sudo -n true 2>/dev/null; then
     sudo -E ./scripts/qemu-kexec-e2e.sh
 else
     warn "sudo not passwordless; run manually:"
     echo "  sudo -E ./scripts/qemu-kexec-e2e.sh"
 fi
+
+step "8/8 aegis-fitness audit"
+cargo run --quiet --release -p aegis-fitness
 
 step "ALL GREEN — ready to push"
