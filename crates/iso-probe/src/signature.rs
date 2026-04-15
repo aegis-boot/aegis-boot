@@ -250,7 +250,8 @@ mod tests {
         std::fs::write(&iso, payload).unwrap_or_else(|e| panic!("write iso: {e}"));
         // Precomputed SHA-256 of "hello world".
         let hex = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-        std::fs::write(dir.path().join("x.iso.sha256"), hex).unwrap_or_else(|e| panic!("write sidecar: {e}"));
+        std::fs::write(dir.path().join("x.iso.sha256"), hex)
+            .unwrap_or_else(|e| panic!("write sidecar: {e}"));
         let result = verify_iso_hash(&iso).unwrap_or_else(|e| panic!("io: {e}"));
         match result {
             HashVerification::Verified { digest, .. } => assert_eq!(digest, hex),
@@ -265,7 +266,8 @@ mod tests {
         std::fs::write(&iso, b"hello world").unwrap_or_else(|e| panic!("write iso: {e}"));
         let wrong = "0".repeat(64);
         let sums = format!("{wrong}  x.iso\n");
-        std::fs::write(dir.path().join("SHA256SUMS"), sums).unwrap_or_else(|e| panic!("write sums: {e}"));
+        std::fs::write(dir.path().join("SHA256SUMS"), sums)
+            .unwrap_or_else(|e| panic!("write sums: {e}"));
         let result = verify_iso_hash(&iso).unwrap_or_else(|e| panic!("io: {e}"));
         match result {
             HashVerification::Mismatch {
@@ -285,14 +287,12 @@ mod tests {
         std::fs::write(&iso, b"hello world").unwrap_or_else(|e| panic!("write iso: {e}"));
         // Correct hash in per-iso sidecar.
         let correct = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-        std::fs::write(dir.path().join("x.iso.sha256"), correct).unwrap_or_else(|e| panic!("write sidecar: {e}"));
+        std::fs::write(dir.path().join("x.iso.sha256"), correct)
+            .unwrap_or_else(|e| panic!("write sidecar: {e}"));
         // Wrong hash in SHA256SUMS — must be ignored because sidecar wins.
         let wrong = "0".repeat(64);
-        std::fs::write(
-            dir.path().join("SHA256SUMS"),
-            format!("{wrong}  x.iso\n"),
-        )
-        .unwrap_or_else(|e| panic!("write sums: {e}"));
+        std::fs::write(dir.path().join("SHA256SUMS"), format!("{wrong}  x.iso\n"))
+            .unwrap_or_else(|e| panic!("write sums: {e}"));
         let result = verify_iso_hash(&iso).unwrap_or_else(|e| panic!("io: {e}"));
         assert!(
             matches!(result, HashVerification::Verified { .. }),

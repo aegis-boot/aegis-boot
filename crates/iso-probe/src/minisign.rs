@@ -251,10 +251,7 @@ mod tests {
     fn summary_strings_are_stable() {
         assert_eq!(SignatureVerification::NotPresent.summary(), "not present");
         assert_eq!(
-            SignatureVerification::KeyNotTrusted {
-                key_id: "x".into()
-            }
-            .summary(),
+            SignatureVerification::KeyNotTrusted { key_id: "x".into() }.summary(),
             "UNTRUSTED KEY"
         );
         assert_eq!(

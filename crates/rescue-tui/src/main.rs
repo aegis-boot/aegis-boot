@@ -20,10 +20,10 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 
 use crate::state::{AppState, Screen};
 
@@ -47,8 +47,9 @@ fn tracing_subscriber_init() {
     // the right destination even for "structured" output — the journal
     // handles it. `AEGIS_LOG_JSON=1` switches to a machine-readable format
     // suited to `journalctl --output=json`; the default stays human-readable.
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("rescue_tui=info,iso_probe=info,kexec_loader=info"));
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new("rescue_tui=info,iso_probe=info,kexec_loader=info")
+    });
     if std::env::var("AEGIS_LOG_JSON").is_ok() {
         let _ = tracing_subscriber::fmt()
             .with_writer(io::stderr)
@@ -94,10 +95,7 @@ fn run(roots: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
         "aegis-boot rescue-tui starting: discovered {} ISO(s)",
         isos.len()
     );
-    tracing::info!(
-        discovered = isos.len(),
-        "ISO discovery complete"
-    );
+    tracing::info!(discovered = isos.len(), "ISO discovery complete");
     for iso in &isos {
         tracing::debug!(
             label = %iso.label,
@@ -205,20 +203,14 @@ fn event_loop<B: ratatui::backend::Backend>(
 /// Non-interactive kexec path for automation. Matches the first ISO whose
 /// path contains `needle` (substring match on the absolute path), then calls
 /// `attempt_kexec`. Returns a meaningful exit code so CI can assert.
-fn run_auto_kexec(
-    state: &AppState,
-    needle: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn run_auto_kexec(state: &AppState, needle: &str) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(needle, "AEGIS_AUTO_KEXEC mode");
     let Some(idx) = state
         .isos
         .iter()
         .position(|iso| iso.iso_path.to_string_lossy().contains(needle))
     else {
-        tracing::error!(
-            needle,
-            "AEGIS_AUTO_KEXEC: no ISO path matched substring"
-        );
+        tracing::error!(needle, "AEGIS_AUTO_KEXEC: no ISO path matched substring");
         return Err(format!("AEGIS_AUTO_KEXEC: no match for '{needle}'").into());
     };
     let Some(iso) = state.isos.get(idx).cloned() else {

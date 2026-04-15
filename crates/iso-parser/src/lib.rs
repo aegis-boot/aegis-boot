@@ -198,6 +198,52 @@ impl OsIsoEnvironment {
             mount_base: PathBuf::from("/tmp/iso-parser-mounts"),
         }
     }
+
+    /// Find a free loop device and attach `iso_path` to it. Tries
+    /// util-linux semantics (`losetup -f --show -r`) first, then falls
+    /// back to busybox semantics (scan `/dev/loop*` manually and attach
+    /// via `losetup <dev> <iso>`). Returns the allocated device path on
+    /// success.
+    fn allocate_loop_device(iso_path: &std::path::Path) -> Option<String> {
+        use std::process::Command;
+
+        // Attempt A: util-linux `-f --show -r`.
+        if let Ok(out) = Command::new("losetup")
+            .args(["-f", "--show", "-r", &iso_path.to_string_lossy()])
+            .output()
+        {
+            if out.status.success() {
+                let dev = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !dev.is_empty() && dev.starts_with("/dev/") {
+                    return Some(dev);
+                }
+            }
+        }
+
+        // Attempt B: busybox fallback. Find a free loop device manually
+        // (one that's not currently bound — busybox `losetup LOOPDEV`
+        // without args prints its binding or errors).
+        for n in 0..16 {
+            let dev = format!("/dev/loop{n}");
+            if !std::path::Path::new(&dev).exists() {
+                continue;
+            }
+            // Query — if it returns non-zero, device is free.
+            let query = Command::new("losetup").arg(&dev).output().ok()?;
+            if query.status.success() {
+                continue; // already bound
+            }
+            // Try to attach.
+            let attach = Command::new("losetup")
+                .args(["-r", &dev, &iso_path.to_string_lossy()])
+                .output()
+                .ok()?;
+            if attach.status.success() {
+                return Some(dev);
+            }
+        }
+        None
+    }
 }
 
 impl Default for OsIsoEnvironment {
@@ -269,47 +315,36 @@ impl IsoEnvironment for OsIsoEnvironment {
         };
 
         if !loop_attempt_ok {
-            // Attempt 2: explicit losetup + mount. Works everywhere.
-            let losetup = Command::new("losetup")
-                .args([
-                    "-f",
-                    "--show",
-                    "-r",
-                    &iso_path.to_string_lossy(),
-                ])
-                .output();
-            if let Ok(ls_out) = losetup {
-                if ls_out.status.success() {
-                    let loop_dev = String::from_utf8_lossy(&ls_out.stdout)
-                        .trim()
-                        .to_string();
-                    if !loop_dev.is_empty() {
-                        let mount_out = Command::new("mount")
-                            .args([
-                                "-r",
-                                "-t",
-                                "iso9660",
-                                &loop_dev,
-                                &mount_point.to_string_lossy(),
-                            ])
-                            .output();
-                        if let Ok(mo) = mount_out {
-                            if mo.status.success() {
-                                debug!(
-                                    "Mounted {} via losetup {} -> {:?}",
-                                    iso_path.display(),
-                                    loop_dev,
-                                    mount_point
-                                );
-                                return Ok(mount_point);
-                            }
-                        }
-                        // losetup succeeded but mount failed — detach.
-                        let _ = Command::new("losetup")
-                            .args(["-d", &loop_dev])
-                            .output();
+            // Attempt 2: explicit losetup + mount. Handles both
+            // util-linux (`losetup -f --show`) and busybox (`losetup -f`
+            // prints the allocated device on stdout as a side effect;
+            // `--show` is a util-linux long option that busybox doesn't
+            // accept). Try util-linux form first; fall back to querying
+            // /dev/loop* after a bare `losetup -f` attach.
+            let loop_dev = Self::allocate_loop_device(iso_path);
+            if let Some(loop_dev) = loop_dev {
+                let mount_out = Command::new("mount")
+                    .args([
+                        "-r",
+                        "-t",
+                        "iso9660",
+                        &loop_dev,
+                        &mount_point.to_string_lossy(),
+                    ])
+                    .output();
+                if let Ok(mo) = mount_out {
+                    if mo.status.success() {
+                        debug!(
+                            "Mounted {} via losetup {} -> {:?}",
+                            iso_path.display(),
+                            loop_dev,
+                            mount_point
+                        );
+                        return Ok(mount_point);
                     }
                 }
+                // losetup succeeded but mount failed — detach.
+                let _ = Command::new("losetup").args(["-d", &loop_dev]).output();
             }
         }
 

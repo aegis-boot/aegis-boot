@@ -2,14 +2,14 @@
 //! [`ratatui::backend::Backend`]. Tested with `TestBackend`.
 
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    Frame,
 };
 
-use crate::state::{AppState, Screen, quirks_summary};
+use crate::state::{quirks_summary, AppState, Screen};
 
 /// Render the current frame for the given state.
 pub fn draw(frame: &mut Frame<'_>, state: &AppState) {
@@ -189,11 +189,7 @@ fn draw_edit_cmdline(
         Line::from("Enter: save · Esc: cancel · ←/→: move · Backspace: delete"),
     ];
     let para = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Edit cmdline"),
-        )
+        .block(Block::default().borders(Borders::ALL).title("Edit cmdline"))
         .wrap(Wrap { trim: false });
     frame.render_widget(para, area);
 }
@@ -227,10 +223,9 @@ fn signature_span(verification: &iso_probe::SignatureVerification) -> Span<'_> {
             "✗ FORGED — bytes don't match sig",
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ),
-        iso_probe::SignatureVerification::Error { .. } => Span::styled(
-            "? sig parse error",
-            Style::default().fg(Color::Yellow),
-        ),
+        iso_probe::SignatureVerification::Error { .. } => {
+            Span::styled("? sig parse error", Style::default().fg(Color::Yellow))
+        }
         iso_probe::SignatureVerification::NotPresent => Span::raw("(no .minisig sidecar)"),
     }
 }
@@ -253,7 +248,9 @@ fn draw_error(frame: &mut Frame<'_>, area: Rect, message: &str, remedy: Option<&
         lines.push(Line::from(r.to_string()));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from("Press q to quit, any other key to return to the list."));
+    lines.push(Line::from(
+        "Press q to quit, any other key to return to the list.",
+    ));
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title("Error"))
         .wrap(Wrap { trim: false });
@@ -283,8 +280,8 @@ impl DistributionLabel for iso_probe::DiscoveredIso {
 mod tests {
     use super::*;
     use iso_probe::{Distribution, Quirk};
-    use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
     use std::path::PathBuf;
 
     fn fake_iso(label: &str) -> iso_probe::DiscoveredIso {
@@ -304,7 +301,9 @@ mod tests {
     fn render_to_string(state: &AppState) -> String {
         let backend = TestBackend::new(80, 20);
         let mut terminal = Terminal::new(backend).unwrap_or_else(|e| panic!("terminal: {e}"));
-        terminal.draw(|f| draw(f, state)).unwrap_or_else(|e| panic!("draw: {e}"));
+        terminal
+            .draw(|f| draw(f, state))
+            .unwrap_or_else(|e| panic!("draw: {e}"));
         terminal
             .backend()
             .buffer()
