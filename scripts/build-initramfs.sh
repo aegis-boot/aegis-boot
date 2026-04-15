@@ -82,12 +82,116 @@ if [[ -z "$BUSYBOX_PATH" ]]; then
     exit 1
 fi
 install -m 0755 "$BUSYBOX_PATH" "$STAGE_DIR/bin/busybox"
+
+# --- util-linux losetup (proper loop-device handling) ------------------------
+# Busybox's losetup applet doesn't accept `--show` and its behavior for
+# loop-device allocation on modern kernels (loop-control, on-demand node
+# creation) is inconsistent. Ship util-linux's real losetup if available;
+# iso-parser prefers it automatically when present.
+UTIL_LOSETUP="$(command -v losetup || true)"
+if [[ -n "$UTIL_LOSETUP" && -f "$UTIL_LOSETUP" ]]; then
+    # Find the actual binary, not a busybox symlink.
+    resolved=$(readlink -f "$UTIL_LOSETUP")
+    if ! [[ "$resolved" =~ busybox ]]; then
+        install -m 0755 "$resolved" "$STAGE_DIR/sbin/losetup.util-linux"
+        copy_libs_placeholder="$STAGE_DIR/sbin/losetup.util-linux"
+    fi
+fi
+
+# --- Kernel modules (isofs, loop, udf) ---------------------------------------
+# Modern Ubuntu distro kernels ship iso9660 support as a MODULE, not
+# built-in. Without loading it, `mount -t iso9660 /dev/loop0 /mnt` fails
+# even though the loop device exists. Ship the module tree so /init can
+# modprobe isofs before attempting ISO mounts.
+#
+# If AEGIS_KMOD_SRC is set, copy modules from there. Otherwise, copy from
+# the currently-running kernel's /lib/modules/$(uname -r)/. When the
+# target kernel in the deployment doesn't match the build host's kernel,
+# operators must override AEGIS_KMOD_SRC — we warn loudly.
+KMOD_SRC="${AEGIS_KMOD_SRC:-}"
+if [[ -z "$KMOD_SRC" ]]; then
+    # Prefer a kernel whose version matches /boot/vmlinuz-* — that's the
+    # kernel the operator actually installed for deployment/testing,
+    # not the build host's running kernel. This matters on CI runners
+    # where the host kernel (e.g. azure) differs from the installed
+    # -generic kernel.
+    for vmlinuz in /boot/vmlinuz-*; do
+        [[ -e "$vmlinuz" && ! -L "$vmlinuz" ]] || continue
+        ver=$(basename "$vmlinuz" | sed 's/^vmlinuz-//')
+        candidate="/lib/modules/$ver"
+        if [[ -d "$candidate/kernel/fs" ]]; then
+            KMOD_SRC="$candidate"
+            break
+        fi
+    done
+fi
+# Fallback: the running kernel's modules (may be wrong if deployment
+# uses a different kernel).
+if [[ -z "$KMOD_SRC" ]]; then
+    for candidate in /lib/modules/*/kernel/fs; do
+        [[ -d "$candidate" ]] || continue
+        KMOD_SRC="${candidate%/kernel/fs}"
+    done
+fi
+if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
+    KVER=$(basename "$KMOD_SRC")
+    log "shipping kernel modules from $KMOD_SRC (kernel $KVER)"
+    MOD_DEST="$STAGE_DIR/lib/modules/$KVER"
+    install -d "$MOD_DEST/kernel/fs/isofs"
+    install -d "$MOD_DEST/kernel/fs/udf"
+    install -d "$MOD_DEST/kernel/drivers/block"
+    # Each module may be .ko or .ko.zst depending on compression. Ship
+    # whatever the source kernel has.
+    # Each module may be .ko, .ko.zst, .ko.xz, or .ko.gz depending on the
+    # kernel's CONFIG_MODULE_COMPRESS_* setting. Busybox's modprobe applet
+    # handles .ko.gz natively but NOT .ko.zst — Ubuntu's stock kernel
+    # compiles as zstd. Decompress on the fly at build time so the shipped
+    # module is always plain .ko (works with every known module loader).
+    copy_module() {
+        local rel_path="$1" dest_dir="$2"
+        local src_dir="$KMOD_SRC/$(dirname "$rel_path" | sed 's|^\./||')"
+        local base
+        base="$(basename "$rel_path")"
+        for ext in ko ko.zst ko.xz ko.gz; do
+            local src="$src_dir/$base.$ext"
+            [[ -f "$src" ]] || continue
+            local dest="$dest_dir/$base.ko"
+            mkdir -p "$(dirname "$dest")"
+            case "$ext" in
+                ko)     install -m 0644 "$src" "$dest" ;;
+                ko.zst) zstd -d -q -c "$src" > "$dest" && chmod 0644 "$dest" ;;
+                ko.xz)  xz -d -c "$src" > "$dest" && chmod 0644 "$dest" ;;
+                ko.gz)  gzip -d -c "$src" > "$dest" && chmod 0644 "$dest" ;;
+            esac
+            return 0
+        done
+        return 1
+    }
+    copy_module "kernel/fs/isofs/isofs" "$MOD_DEST/kernel/fs/isofs" \
+        || log "WARNING: isofs module not found"
+    copy_module "kernel/fs/udf/udf" "$MOD_DEST/kernel/fs/udf" \
+        || log "WARNING: udf module not found"
+    copy_module "kernel/drivers/block/loop" "$MOD_DEST/kernel/drivers/block" \
+        || log "WARNING: loop module not found"
+    # Regenerate modules.dep so it references our decompressed .ko paths
+    # (source kernel's modules.dep points at .ko.zst). depmod -b rebuilds
+    # into the staged tree; no runtime kernel match needed.
+    if command -v depmod >/dev/null 2>&1; then
+        depmod -b "$STAGE_DIR" "$KVER" 2>/dev/null || \
+            log "WARNING: depmod failed; busybox modprobe may miss deps"
+    else
+        log "WARNING: depmod not on PATH; modules will load only with explicit paths"
+    fi
+else
+    log "WARNING: no kernel modules source found; iso9660 mounts will fail"
+    log "  set AEGIS_KMOD_SRC=/lib/modules/<kver> if your target kernel needs modules"
+fi
 # Applets. Covered: mount, umount, mkdir, ls, sh, cat, mdev.
 # rescue-tui doesn't call these directly — they exist for the init script
 # below and for emergency shell fallback.
 for applet in sh mount umount mkdir ls cat dmesg switch_root losetup \
               mdev blkid lsblk modprobe sleep echo ln readlink rmdir \
-              findfs; do
+              findfs uname grep sed cp rm; do
     ln -sf /bin/busybox "$STAGE_DIR/bin/$applet"
 done
 
@@ -117,6 +221,10 @@ copy_libs() {
 copy_libs "$STAGE_DIR/usr/bin/rescue-tui"
 # If distro busybox is dynamically linked, ldd would error; ignore silently.
 copy_libs "$STAGE_DIR/bin/busybox" 2>/dev/null || true
+# util-linux losetup is dynamically linked.
+if [[ -f "$STAGE_DIR/sbin/losetup.util-linux" ]]; then
+    copy_libs "$STAGE_DIR/sbin/losetup.util-linux"
+fi
 
 # --- PID 1 init script -------------------------------------------------------
 cat > "$STAGE_DIR/init" <<'INIT_SH'
@@ -158,7 +266,25 @@ for dev in /dev/sd* /dev/nvme*n*p* /dev/vd* /dev/mmcblk*p*; do
 done
 
 export AEGIS_ISO_ROOTS=/run/media/aegis-isos:/run/media
-export PATH=/usr/bin:/usr/sbin:/bin:/sbin
+# Prefer util-linux losetup over busybox applet — iso-parser's
+# loop-mount path works reliably with real losetup semantics.
+if [ -x /sbin/losetup.util-linux ]; then
+    /bin/ln -sf /sbin/losetup.util-linux /usr/sbin/losetup
+    export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+else
+    export PATH=/usr/bin:/usr/sbin:/bin:/sbin
+fi
+
+# Load ISO9660 / UDF filesystem modules. On most distro kernels these
+# are modules (not built-in); without them, ISO discovery's mount step
+# silently fails. modprobe scans /lib/modules/$(uname -r)/ which
+# build-initramfs.sh populated from the build-host kernel. If the
+# deployment kernel doesn't match, operator can rebuild with
+# AEGIS_KMOD_SRC override.
+/bin/modprobe loop 2>/dev/null || true
+/bin/modprobe isofs 2>/dev/null || true
+/bin/modprobe udf 2>/dev/null || true
+
 export TERM=linux
 
 # Hand off. On clean quit, drop to a shell so the user isn't staring at

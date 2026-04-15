@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub use iso_parser::{BootEntry, Distribution, IsoError};
-pub use minisign::{SignatureVerification, verify_iso_signature};
-pub use signature::{HashVerification, verify_iso_hash};
+pub use minisign::{verify_iso_signature, SignatureVerification};
+pub use signature::{verify_iso_hash, HashVerification};
 
 /// Metadata for a single discovered ISO. Paths are relative to the (now
 /// unmounted) ISO root and become absolute once handed to [`prepare`].
@@ -226,10 +226,9 @@ pub fn lookup_quirks(distribution: Distribution) -> Vec<Quirk> {
         // shim-review-board-approved shim). Alpine and NixOS ship unsigned
         // ISOs by default too. Unknown distributions share the same
         // conservative default: assume unsigned until proven otherwise.
-        Distribution::Arch
-        | Distribution::Alpine
-        | Distribution::NixOS
-        | Distribution::Unknown => vec![Quirk::UnsignedKernel],
+        Distribution::Arch | Distribution::Alpine | Distribution::NixOS | Distribution::Unknown => {
+            vec![Quirk::UnsignedKernel]
+        }
 
         // Windows uses the NT loader / UEFI bootmgfw, not a Linux kernel.
         // Surface the non-bootability explicitly so the TUI can disable
@@ -328,16 +327,12 @@ mod tests {
 
     #[test]
     fn alpine_flags_unsigned_kernel() {
-        assert!(
-            lookup_quirks(Distribution::Alpine).contains(&Quirk::UnsignedKernel)
-        );
+        assert!(lookup_quirks(Distribution::Alpine).contains(&Quirk::UnsignedKernel));
     }
 
     #[test]
     fn nixos_flags_unsigned_kernel() {
-        assert!(
-            lookup_quirks(Distribution::NixOS).contains(&Quirk::UnsignedKernel)
-        );
+        assert!(lookup_quirks(Distribution::NixOS).contains(&Quirk::UnsignedKernel));
     }
 
     #[test]
@@ -359,7 +354,10 @@ mod tests {
         };
         let root = PathBuf::from("/run/media/usb1");
         let discovered = boot_entry_to_discovered(&entry, &root);
-        assert_eq!(discovered.iso_path, PathBuf::from("/run/media/usb1/ubuntu-24.04.iso"));
+        assert_eq!(
+            discovered.iso_path,
+            PathBuf::from("/run/media/usb1/ubuntu-24.04.iso")
+        );
         assert_eq!(discovered.label, "Ubuntu 24.04");
         assert_eq!(discovered.kernel, PathBuf::from("casper/vmlinuz"));
         assert_eq!(discovered.initrd, Some(PathBuf::from("casper/initrd")));

@@ -160,7 +160,9 @@ impl Drop for OwnedFd {
         // but construction paths guarantee `self.0 >= 0` and single-owner.
         #[allow(unsafe_code)]
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-        unsafe { libc::close(self.0); }
+        unsafe {
+            libc::close(self.0);
+        }
     }
 }
 

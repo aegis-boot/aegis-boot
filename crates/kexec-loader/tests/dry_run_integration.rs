@@ -24,7 +24,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use kexec_loader::{KexecRequest, load_dry};
+use kexec_loader::{load_dry, KexecRequest};
 
 fn integration_enabled() -> bool {
     std::env::var("AEGIS_INTEGRATION_ROOT").is_ok()

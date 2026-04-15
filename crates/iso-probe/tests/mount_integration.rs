@@ -92,8 +92,8 @@ fn discover_and_prepare_round_trip() {
     assert_eq!(iso.kernel, Path::new("casper/vmlinuz"));
 
     let mount_point = {
-        let prepared = iso_probe::prepare(iso)
-            .unwrap_or_else(|e| panic!("prepare returned error: {e}"));
+        let prepared =
+            iso_probe::prepare(iso).unwrap_or_else(|e| panic!("prepare returned error: {e}"));
         let mp = prepared.mount_point().to_path_buf();
 
         // Absolute kernel path must be readable and match the fixture bytes.

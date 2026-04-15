@@ -119,10 +119,7 @@ impl AppState {
 
     /// Insert a single character at the cursor.
     pub fn cmdline_insert(&mut self, ch: char) {
-        let Screen::EditCmdline {
-            buffer, cursor, ..
-        } = &mut self.screen
-        else {
+        let Screen::EditCmdline { buffer, cursor, .. } = &mut self.screen else {
             return;
         };
         buffer.insert(*cursor, ch);
@@ -131,10 +128,7 @@ impl AppState {
 
     /// Delete one char before the cursor (backspace).
     pub fn cmdline_backspace(&mut self) {
-        let Screen::EditCmdline {
-            buffer, cursor, ..
-        } = &mut self.screen
-        else {
+        let Screen::EditCmdline { buffer, cursor, .. } = &mut self.screen else {
             return;
         };
         if *cursor == 0 {
@@ -147,10 +141,7 @@ impl AppState {
 
     /// Move cursor left one char (saturating).
     pub fn cmdline_cursor_left(&mut self) {
-        let Screen::EditCmdline {
-            buffer, cursor, ..
-        } = &mut self.screen
-        else {
+        let Screen::EditCmdline { buffer, cursor, .. } = &mut self.screen else {
             return;
         };
         if *cursor == 0 {
@@ -161,10 +152,7 @@ impl AppState {
 
     /// Move cursor right one char (saturating).
     pub fn cmdline_cursor_right(&mut self) {
-        let Screen::EditCmdline {
-            buffer, cursor, ..
-        } = &mut self.screen
-        else {
+        let Screen::EditCmdline { buffer, cursor, .. } = &mut self.screen else {
             return;
         };
         if *cursor >= buffer.len() {
@@ -355,7 +343,9 @@ pub fn error_diagnostic_with_iso(
         ),
         KexecError::Unsupported => (
             "kexec is only available on Linux".to_string(),
-            Some("rescue-tui is meant to run inside the signed Linux rescue initramfs.".to_string()),
+            Some(
+                "rescue-tui is meant to run inside the signed Linux rescue initramfs.".to_string(),
+            ),
         ),
     }
 }
@@ -478,8 +468,7 @@ mod tests {
             hash_verification: iso_probe::HashVerification::NotPresent,
             signature_verification: iso_probe::SignatureVerification::NotPresent,
         };
-        let (_, remedy) =
-            error_diagnostic_with_iso(&KexecError::SignatureRejected, Some(&iso));
+        let (_, remedy) = error_diagnostic_with_iso(&KexecError::SignatureRejected, Some(&iso));
         let r = unwrap_remedy(remedy);
         assert!(r.contains("mokutil --import"));
         assert!(r.contains(&key_path.display().to_string()));
@@ -567,7 +556,12 @@ mod tests {
         let mut s = AppState::new(vec![fake_iso("a")]);
         s.confirm_selection();
         s.enter_cmdline_editor();
-        let Screen::EditCmdline { buffer, cursor, selected } = &s.screen else {
+        let Screen::EditCmdline {
+            buffer,
+            cursor,
+            selected,
+        } = &s.screen
+        else {
             panic!("expected EditCmdline screen");
         };
         assert_eq!(*selected, 0);
@@ -625,7 +619,10 @@ mod tests {
         s.cmdline_insert('q');
         s.commit_cmdline_edit();
         assert_eq!(s.screen, Screen::Confirm { selected: 0 });
-        assert_eq!(s.cmdline_overrides.get(&0), Some(&"boot=casper q".to_string()));
+        assert_eq!(
+            s.cmdline_overrides.get(&0),
+            Some(&"boot=casper q".to_string())
+        );
         assert_eq!(s.effective_cmdline(0), "boot=casper q");
     }
 

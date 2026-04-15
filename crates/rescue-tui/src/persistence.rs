@@ -26,7 +26,8 @@ pub struct LastChoice {
 /// for operators who want to persist state somewhere other than `/run`.
 #[must_use]
 pub fn default_state_dir() -> PathBuf {
-    std::env::var("AEGIS_STATE_DIR").map_or_else(|_| PathBuf::from("/run/aegis-boot"), PathBuf::from)
+    std::env::var("AEGIS_STATE_DIR")
+        .map_or_else(|_| PathBuf::from("/run/aegis-boot"), PathBuf::from)
 }
 
 /// Path to the last-choice file inside `dir`.
@@ -103,7 +104,8 @@ mod tests {
     fn load_corrupt_returns_none() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
         fs::create_dir_all(dir.path()).unwrap_or_else(|e| panic!("mkdir: {e}"));
-        fs::write(last_choice_path(dir.path()), "{{{not json").unwrap_or_else(|e| panic!("write: {e}"));
+        fs::write(last_choice_path(dir.path()), "{{{not json")
+            .unwrap_or_else(|e| panic!("write: {e}"));
         assert!(load(dir.path()).is_none());
     }
 
