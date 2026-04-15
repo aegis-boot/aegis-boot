@@ -235,7 +235,11 @@ impl IsoEnvironment for OsIsoEnvironment {
         let mount_point = self.mount_base.join(format!("mount_{}", iso_name));
         std::fs::create_dir_all(&mount_point)?;
 
-        // Mount via loopback (requires root or fuseiso)
+        // Attempt 1: `mount -o loop,ro`. Works with util-linux; may not
+        // work with some busybox builds where the `loop` option is a
+        // no-op (it mounts the file as if it were a raw block device,
+        // which then fails). Try it first because it's one syscall on
+        // util-linux-based systems.
         let output = Command::new("mount")
             .args([
                 "-o",
@@ -246,6 +250,68 @@ impl IsoEnvironment for OsIsoEnvironment {
                 &mount_point.to_string_lossy(),
             ])
             .output();
+
+        // If that fails AND we have `losetup` available, fall through to
+        // the explicit loop-setup path below. Verify by checking if the
+        // mount point now contains anything (mount silently succeeds with
+        // nothing mounted under certain busybox builds — test by listing).
+        let loop_attempt_ok = match &output {
+            Ok(out) if out.status.success() => {
+                // Verify the mount actually took by checking for directory
+                // entries. An empty dir after a "successful" mount means
+                // busybox loop-mode didn't work.
+                std::fs::read_dir(&mount_point)
+                    .ok()
+                    .and_then(|mut entries| entries.next())
+                    .is_some()
+            }
+            _ => false,
+        };
+
+        if !loop_attempt_ok {
+            // Attempt 2: explicit losetup + mount. Works everywhere.
+            let losetup = Command::new("losetup")
+                .args([
+                    "-f",
+                    "--show",
+                    "-r",
+                    &iso_path.to_string_lossy(),
+                ])
+                .output();
+            if let Ok(ls_out) = losetup {
+                if ls_out.status.success() {
+                    let loop_dev = String::from_utf8_lossy(&ls_out.stdout)
+                        .trim()
+                        .to_string();
+                    if !loop_dev.is_empty() {
+                        let mount_out = Command::new("mount")
+                            .args([
+                                "-r",
+                                "-t",
+                                "iso9660",
+                                &loop_dev,
+                                &mount_point.to_string_lossy(),
+                            ])
+                            .output();
+                        if let Ok(mo) = mount_out {
+                            if mo.status.success() {
+                                debug!(
+                                    "Mounted {} via losetup {} -> {:?}",
+                                    iso_path.display(),
+                                    loop_dev,
+                                    mount_point
+                                );
+                                return Ok(mount_point);
+                            }
+                        }
+                        // losetup succeeded but mount failed — detach.
+                        let _ = Command::new("losetup")
+                            .args(["-d", &loop_dev])
+                            .output();
+                    }
+                }
+            }
+        }
 
         match output {
             Ok(out) if out.status.success() => {
