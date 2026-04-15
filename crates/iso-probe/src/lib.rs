@@ -100,10 +100,14 @@ pub enum ProbeError {
 pub fn discover(roots: &[PathBuf]) -> Result<Vec<DiscoveredIso>, ProbeError> {
     let parser = iso_parser::IsoParser::new(iso_parser::OsIsoEnvironment::new());
     let mut all: Vec<DiscoveredIso> = Vec::new();
-    // Dedupe by post-scan iso_path so roots that share ancestry (e.g.
-    // /run/media/aegis-isos is a subdir of /run/media — both are in
-    // AEGIS_ISO_ROOTS) don't yield duplicate entries. (#117)
-    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    // Dedupe across roots that share ancestry (e.g. /run/media/aegis-isos
+    // is a subdir of /run/media; both listed in AEGIS_ISO_ROOTS). (#117)
+    // iso-parser stores source_iso as filename-only; we can't reliably
+    // canonicalize because scan-2's root.join(filename) points to a
+    // non-existent path. Dedupe by (filename, size) — effectively a
+    // content-identity key for ISOs — resolved per root via search
+    // for an existing candidate on disk.
+    let mut seen: std::collections::HashSet<(String, u64)> = std::collections::HashSet::new();
     for root in roots {
         // Missing / unreadable roots are not an error — the rescue environment
         // routinely runs with `/run/media` present but `/mnt` empty or vice
@@ -122,9 +126,14 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<DiscoveredIso>, ProbeError> {
             Ok(entries) => {
                 let before = all.len();
                 for entry in &entries {
-                    let iso_path = root.join(&entry.source_iso);
-                    let canonical = std::fs::canonicalize(&iso_path).unwrap_or(iso_path);
-                    if !seen.insert(canonical) {
+                    // Key = (source_iso filename, file size). Need size
+                    // so two ISOs with the same filename in different
+                    // dirs don't collide. Tree-walk for the actual file
+                    // under the current root — iso-parser already did
+                    // this during scan, but we need the result back.
+                    let size = find_iso_size(root, &entry.source_iso).unwrap_or(0);
+                    let key = (entry.source_iso.clone(), size);
+                    if !seen.insert(key) {
                         continue;
                     }
                     all.push(boot_entry_to_discovered(entry, root));
@@ -156,6 +165,44 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<DiscoveredIso>, ProbeError> {
     } else {
         Ok(all)
     }
+}
+
+/// Recursive walk helper for [`find_iso_size`]. Bounded depth so we
+/// don't wander into a large tree. `AEGIS_ISOS` layouts are flat;
+/// 3 levels is more than enough. (#117)
+fn walk_for_iso_size(dir: &Path, filename: &str, depth: u32) -> Option<u64> {
+    if depth == 0 {
+        return None;
+    }
+    let iter = std::fs::read_dir(dir).ok()?;
+    for entry in iter.flatten() {
+        let p = entry.path();
+        if let Ok(ft) = entry.file_type() {
+            if ft.is_file() && p.file_name().and_then(|n| n.to_str()) == Some(filename) {
+                return entry.metadata().ok().map(|m| m.len());
+            }
+            if ft.is_dir() {
+                if let Some(size) = walk_for_iso_size(&p, filename, depth - 1) {
+                    return Some(size);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Walk `root` looking for a file named `filename` at any depth and
+/// return its byte size. Used as a dedup helper in [`discover`] —
+/// iso-parser stores `source_iso` as filename-only, so we have to walk
+/// to find the real file. (#117)
+fn find_iso_size(root: &Path, filename: &str) -> Option<u64> {
+    let direct = root.join(filename);
+    if let Ok(m) = std::fs::metadata(&direct) {
+        if m.is_file() {
+            return Some(m.len());
+        }
+    }
+    walk_for_iso_size(root, filename, 3)
 }
 
 fn boot_entry_to_discovered(entry: &BootEntry, search_root: &Path) -> DiscoveredIso {
