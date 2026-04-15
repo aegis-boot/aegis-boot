@@ -2,6 +2,31 @@
 
 All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] — 2026-04-15
+
+**Accessibility + design-review cleanup release.**
+
+### Headline — text-mode accessibility (#104)
+
+- **`AEGIS_A11Y=text` / `TERM=dumb` activates a plain-text mode.** ratatui's alternate-screen rendering is invisible to screen readers (Orca, NVDA) and braille displays (via brltty). Text mode prints a numbered menu to stdout, reads a line from stdin, and never touches raw mode / alt-screen / ANSI — usable from serial consoles, 40-col terminals, and accessibility tools out of the box.
+- **Full trust-challenge + rescue-shell parity.** The text-mode Confirm flow prints the one-frame evidence block, asks y/N for GREEN verdicts or requires typing `boot` for YELLOW/GRAY degraded-trust verdicts (same gate as the TUI), hard-blocks RED.
+- **`ANN:` announcements on stderr** on every menu paint and state transition. brltty / speakup can mirror to braille / speech — same pattern `dialog(1)` uses.
+
+### Design-review follow-ups ([#101](https://github.com/williamzujkowski/aegis-boot/issues/101), [#102](https://github.com/williamzujkowski/aegis-boot/issues/102), [#103](https://github.com/williamzujkowski/aegis-boot/issues/103))
+
+- **Compacted Confirm screen** — Kernel+Initrd merged onto one `Boot:` line; Checksum+Signature merged onto one `Trust:` line. Net −2 rows so the verdict stays above the fold on 24-row terminals.
+- **Filter-mode info bar is unmistakable** — reversed-style `FILTER` label in `theme.warning`, bold filter text, `SLOW_BLINK` caret span. Previously the only cue was a trailing `_`.
+- **`q` on Confirm returns to List** (not ConfirmQuit). Operators meaning "quit this screen" no longer get the reboot-the-machine prompt. ConfirmQuit still reachable from List.
+
+### Tests
+
+140 workspace tests (unchanged — all shipped changes are render- or branch-level without new state transitions).
+
+### Deferred
+
+- Text-mode process-level integration tests (filed as follow-up if requested).
+- Text-mode filter / sort / verify-now (filed if real operators ask — the assistive-tech surface area is usually "pick an ISO, boot it").
+
 ## [0.10.1] — 2026-04-15
 
 **Brand identity + design-review fixes.** Delivers [#76](https://github.com/williamzujkowski/aegis-boot/issues/76) (brand identity spec produced by the nexus-agents `ux_expert`) and the three concrete fixes from the expert's subsequent self-critique.
