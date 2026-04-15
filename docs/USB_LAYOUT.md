@@ -47,9 +47,15 @@ FAT32 caps individual files at **4 GB minus 1 byte**. Typical distro ISOs:
 | Alpine standard | ~200 MB | ✅ |
 | NixOS minimal | ~900 MB | ✅ |
 
-If you need to ship the full Ubuntu LTS desktop image: rebuild with `mkusb.sh` using `DATA_FS=ext4`. Trade-off: ext4 isn't natively writable from macOS or Windows, so the "drop files on the host" workflow requires Linux or FUSE drivers.
+If you need to ship the full Ubuntu LTS desktop image: rebuild with:
 
-(The `DATA_FS` override is not yet implemented — issue #40 tracks.)
+```bash
+DATA_FS=ext4 ./scripts/mkusb.sh
+```
+
+Trade-off: ext4 isn't natively writable from macOS or Windows, so the "drop files on the host" workflow requires Linux (or FUSE drivers like `ext4fuse` on macOS, `Ext2Fsd`/`Paragon` on Windows). Pick based on where you're dropping ISOs onto the stick.
+
+The data-partition GUID changes with the filesystem: FAT32 gets `0700` (Microsoft Basic Data, cross-OS friendly) and ext4 gets `8300` (Linux filesystem). Both mount fine from Linux; the type only matters for auto-mount behavior on other OSes.
 
 ## Building
 
