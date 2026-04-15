@@ -110,7 +110,24 @@ fi
 # operators must override AEGIS_KMOD_SRC — we warn loudly.
 KMOD_SRC="${AEGIS_KMOD_SRC:-}"
 if [[ -z "$KMOD_SRC" ]]; then
-    # Pick the most recent /lib/modules/*/kernel/fs directory we can find.
+    # Prefer a kernel whose version matches /boot/vmlinuz-* — that's the
+    # kernel the operator actually installed for deployment/testing,
+    # not the build host's running kernel. This matters on CI runners
+    # where the host kernel (e.g. azure) differs from the installed
+    # -generic kernel.
+    for vmlinuz in /boot/vmlinuz-*; do
+        [[ -e "$vmlinuz" && ! -L "$vmlinuz" ]] || continue
+        ver=$(basename "$vmlinuz" | sed 's/^vmlinuz-//')
+        candidate="/lib/modules/$ver"
+        if [[ -d "$candidate/kernel/fs" ]]; then
+            KMOD_SRC="$candidate"
+            break
+        fi
+    done
+fi
+# Fallback: the running kernel's modules (may be wrong if deployment
+# uses a different kernel).
+if [[ -z "$KMOD_SRC" ]]; then
     for candidate in /lib/modules/*/kernel/fs; do
         [[ -d "$candidate" ]] || continue
         KMOD_SRC="${candidate%/kernel/fs}"
@@ -159,7 +176,7 @@ fi
 # below and for emergency shell fallback.
 for applet in sh mount umount mkdir ls cat dmesg switch_root losetup \
               mdev blkid lsblk modprobe sleep echo ln readlink rmdir \
-              findfs; do
+              findfs uname grep sed cp rm; do
     ln -sf /bin/busybox "$STAGE_DIR/bin/$applet"
 done
 
