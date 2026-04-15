@@ -1,10 +1,31 @@
 # Default owner for everything
-*                       @williamzujkowski
+*                                       @williamzujkowski
 
-# Security-critical: require explicit review
-/THREAT_MODEL.md        @williamzujkowski
-/SECURITY.md            @williamzujkowski
-/Dockerfile.locked      @williamzujkowski
-/flake.nix              @williamzujkowski
-/.github/workflows/     @williamzujkowski
-/crates/iso-parser/     @williamzujkowski
+# Security-critical: explicit review gate
+/THREAT_MODEL.md                        @williamzujkowski
+/SECURITY.md                            @williamzujkowski
+/Dockerfile.locked                      @williamzujkowski
+/flake.nix                              @williamzujkowski
+/.github/workflows/                     @williamzujkowski
+
+# Crates — workspace + each crate
+/Cargo.toml                             @williamzujkowski
+/Cargo.lock                             @williamzujkowski
+/crates/iso-parser/                     @williamzujkowski
+/crates/iso-probe/                      @williamzujkowski
+/crates/kexec-loader/                   @williamzujkowski
+/crates/rescue-tui/                     @williamzujkowski
+/crates/aegis-fitness/                  @williamzujkowski
+
+# Scripts that produce the bootable artifact or run as PID 1
+/scripts/build-initramfs.sh             @williamzujkowski
+/scripts/mkusb.sh                       @williamzujkowski
+/scripts/qemu-kexec-e2e.sh              @williamzujkowski
+/scripts/ovmf-secboot-e2e.sh            @williamzujkowski
+
+# Governance docs
+/CONTRIBUTING.md                        @williamzujkowski
+/CODE_OF_CONDUCT.md                     @williamzujkowski
+/ROADMAP.md                             @williamzujkowski
+/CHANGELOG.md                           @williamzujkowski
+/docs/adr/                              @williamzujkowski
