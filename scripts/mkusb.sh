@@ -33,6 +33,7 @@ IMG="${IMG:-$OUT_DIR/aegis-boot.img}"
 DISK_SIZE_MB="${DISK_SIZE_MB:-2048}"     # default 2 GB test image
 ESP_SIZE_MB="${ESP_SIZE_MB:-400}"
 DATA_LABEL="${DATA_LABEL:-AEGIS_ISOS}"
+DATA_FS="${DATA_FS:-fat32}"              # fat32 or ext4; ext4 removes 4GB/file cap
 
 # Input binary locations (overridable for cross-builds / packaging).
 SHIM_SRC="${SHIM_SRC:-/usr/lib/shim/shimx64.efi.signed}"
@@ -138,22 +139,48 @@ if (( DATA_SIZE_MB < 32 )); then
 fi
 DATA_IMG="$WORK/data.part"
 dd if=/dev/zero of="$DATA_IMG" bs=1M count="$DATA_SIZE_MB" status=none
-# FAT32 chosen for cross-OS write-friendliness — users on macOS/Windows
-# will want to drop ISOs onto it without installing drivers. Max single
-# file size 4 GB minus 1 byte is acceptable: DVD-sized ISOs (4.7 GB)
-# need to be split or we ship ext4 as an alternative. Keep FAT32 default;
-# document the limit in USB_LAYOUT.md.
-mkfs.vfat -F 32 -n "$DATA_LABEL" "$DATA_IMG" >/dev/null
+# DATA_FS picks the filesystem for the user's ISO-drop partition.
+#   fat32 (default) — cross-OS write-friendly; max 4 GB per file
+#   ext4            — no per-file limit; writable from Linux only
+case "$DATA_FS" in
+    fat32)
+        mkfs.vfat -F 32 -n "$DATA_LABEL" "$DATA_IMG" >/dev/null
+        ;;
+    ext4)
+        require mkfs.ext4
+        # -F: force (we're writing to a regular file, not a block device)
+        # -L: volume label (findfs LABEL=AEGIS_ISOS needs it)
+        # -E nodiscard: don't try TRIM on a regular file
+        # -O ^has_journal: skip journal on removable media — cleaner dd
+        #   output, slightly better wear, initramfs mounts read-only anyway
+        mkfs.ext4 -F -L "$DATA_LABEL" -E nodiscard -O ^has_journal \
+            "$DATA_IMG" >/dev/null 2>&1
+        ;;
+    *)
+        echo "DATA_FS must be 'fat32' or 'ext4', got: $DATA_FS" >&2
+        exit 1
+        ;;
+esac
+log "data partition: $DATA_FS, ${DATA_SIZE_MB} MB, label $DATA_LABEL"
 
 # ---- Assemble the GPT disk -------------------------------------------------
 log "assembling GPT disk: $IMG (${DISK_SIZE_MB} MB)"
 mkdir -p "$OUT_DIR"
 dd if=/dev/zero of="$IMG" bs=1M count="$DISK_SIZE_MB" status=none
 
+# Data partition GUID depends on filesystem: 0700 Microsoft Basic Data
+# (what Windows/macOS expect to see for FAT32), 8300 Linux filesystem
+# (appropriate for ext4). Both are equally mountable from Linux; the
+# type code mostly matters for cross-OS automount behavior.
+case "$DATA_FS" in
+    fat32) DATA_TYPE="0700" ;;
+    ext4)  DATA_TYPE="8300" ;;
+esac
+
 sgdisk -o "$IMG" >/dev/null
 sgdisk \
-    -n 1:2048:+${ESP_SIZE_MB}M -t 1:ef00 -c 1:"EFI System" \
-    -n 2:0:0                   -t 2:8300 -c 2:"$DATA_LABEL" \
+    -n 1:2048:+${ESP_SIZE_MB}M -t 1:ef00      -c 1:"EFI System" \
+    -n 2:0:0                   -t 2:"$DATA_TYPE" -c 2:"$DATA_LABEL" \
     "$IMG" >/dev/null
 
 # Splice partitions into the disk image. sgdisk reports offsets; derive
