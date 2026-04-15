@@ -206,6 +206,78 @@ if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
         "udf" "CONFIG_UDF_FS"
     try_module "kernel/drivers/block/loop" "$MOD_DEST/kernel/drivers/block" \
         "loop" "CONFIG_BLK_DEV_LOOP"
+
+    # --- storage controller modules (#72) ------------------------------
+    # Without these, /dev/sd* / /dev/nvme* never appear on real hardware
+    # because Ubuntu generic kernels compile most storage drivers as
+    # modules. Modules are copied BY RELATIVE PATH so copy_module's
+    # src_dir resolution works regardless of where the module actually
+    # lives under /lib/modules/<ver>. Each call is best-effort — any
+    # missing module logs a warning but doesn't fail the build.
+
+    # SCSI core — prerequisite for sd_mod and usb-storage.
+    try_module "kernel/drivers/scsi/scsi_mod" \
+        "$MOD_DEST/kernel/drivers/scsi" \
+        "scsi_mod" "CONFIG_SCSI"
+    try_module "kernel/drivers/scsi/sd_mod" \
+        "$MOD_DEST/kernel/drivers/scsi" \
+        "sd_mod" "CONFIG_BLK_DEV_SD"
+
+    # SATA / AHCI — most modern desktops and laptops.
+    try_module "kernel/drivers/ata/libata" \
+        "$MOD_DEST/kernel/drivers/ata" \
+        "libata" "CONFIG_ATA"
+    try_module "kernel/drivers/ata/libahci" \
+        "$MOD_DEST/kernel/drivers/ata" \
+        "libahci" "CONFIG_SATA_AHCI"
+    try_module "kernel/drivers/ata/ahci" \
+        "$MOD_DEST/kernel/drivers/ata" \
+        "ahci" "CONFIG_SATA_AHCI"
+
+    # NVMe — modern laptops and workstations.
+    try_module "kernel/drivers/nvme/host/nvme-core" \
+        "$MOD_DEST/kernel/drivers/nvme/host" \
+        "nvme-core" "CONFIG_NVME_CORE"
+    try_module "kernel/drivers/nvme/host/nvme" \
+        "$MOD_DEST/kernel/drivers/nvme/host" \
+        "nvme" "CONFIG_BLK_DEV_NVME"
+
+    # USB core + host controllers — THE deployment path (USB stick).
+    try_module "kernel/drivers/usb/core/usbcore" \
+        "$MOD_DEST/kernel/drivers/usb/core" \
+        "usbcore" "CONFIG_USB"
+    try_module "kernel/drivers/usb/common/usb-common" \
+        "$MOD_DEST/kernel/drivers/usb/common" \
+        "usb-common" "CONFIG_USB_COMMON"
+    try_module "kernel/drivers/usb/host/xhci-hcd" \
+        "$MOD_DEST/kernel/drivers/usb/host" \
+        "xhci-hcd" "CONFIG_USB_XHCI_HCD"
+    try_module "kernel/drivers/usb/host/xhci-pci" \
+        "$MOD_DEST/kernel/drivers/usb/host" \
+        "xhci-pci" "CONFIG_USB_XHCI_PCI"
+    try_module "kernel/drivers/usb/host/ehci-hcd" \
+        "$MOD_DEST/kernel/drivers/usb/host" \
+        "ehci-hcd" "CONFIG_USB_EHCI_HCD"
+    try_module "kernel/drivers/usb/host/ehci-pci" \
+        "$MOD_DEST/kernel/drivers/usb/host" \
+        "ehci-pci" "CONFIG_USB_EHCI_PCI"
+
+    # USB mass storage — both classic (usb-storage) and UAS (USB 3.x).
+    try_module "kernel/drivers/usb/storage/usb-storage" \
+        "$MOD_DEST/kernel/drivers/usb/storage" \
+        "usb-storage" "CONFIG_USB_STORAGE"
+    try_module "kernel/drivers/usb/storage/uas" \
+        "$MOD_DEST/kernel/drivers/usb/storage" \
+        "uas" "CONFIG_USB_UAS"
+
+    # --- vfat NLS fallback (#68 residual) -------------------------------
+    # CONFIG_NLS_DEFAULT="utf8" on Ubuntu but NLS_UTF8 is a module. Ship
+    # it so `mount -t vfat` works without the explicit codepage/iocharset
+    # options. Defensive — /init also passes iocharset=cp437 which is
+    # built-in on all known Ubuntu generic kernels.
+    try_module "kernel/fs/nls/nls_utf8" \
+        "$MOD_DEST/kernel/fs/nls" \
+        "nls_utf8" "CONFIG_NLS_UTF8"
     # Regenerate modules.dep so it references our decompressed .ko paths
     # (source kernel's modules.dep points at .ko.zst). depmod -b rebuilds
     # into the staged tree; no runtime kernel match needed.
@@ -286,8 +358,26 @@ else
 fi
 /bin/mount -t tmpfs  run   /run
 
+# Load storage controller modules so /dev/sd* / /dev/nvme* appear on
+# real hardware. Order matters: bus cores before hosts before class
+# drivers. Ignore failures (modules may be built-in on some kernels
+# — modprobe logs a no-op and returns 0, or errors out if truly
+# absent which is fine). (#72)
+/bin/echo "init: loading storage modules"
+for m in scsi_mod sd_mod \
+         libata libahci ahci \
+         nvme-core nvme \
+         usbcore usb-common xhci-hcd xhci-pci ehci-hcd ehci-pci \
+         usb-storage uas \
+         nls_utf8 \
+         loop isofs udf; do
+    /bin/modprobe "$m" 2>/dev/null || true
+done
+
 # Give the kernel a moment to enumerate USB/NVMe devices before we look.
-/bin/sleep 2
+# USB bus probe can take a second or two on real hardware (hub reset
+# sequence, UAS enumeration). 3s is conservative.
+/bin/sleep 3
 /bin/echo "init: kernel cmdline: $(/bin/cat /proc/cmdline 2>/dev/null || echo '?')"
 /bin/echo "init: mounts active:"
 /bin/cat /proc/mounts 2>/dev/null | /bin/sed 's/^/init:   /' || /bin/echo "init:   (cat /proc/mounts failed)"
@@ -377,15 +467,7 @@ else
     export PATH=/usr/bin:/usr/sbin:/bin:/sbin
 fi
 
-# Load ISO9660 / UDF filesystem modules. On most distro kernels these
-# are modules (not built-in); without them, ISO discovery's mount step
-# silently fails. modprobe scans /lib/modules/$(uname -r)/ which
-# build-initramfs.sh populated from the build-host kernel. If the
-# deployment kernel doesn't match, operator can rebuild with
-# AEGIS_KMOD_SRC override.
-/bin/modprobe loop 2>/dev/null || true
-/bin/modprobe isofs 2>/dev/null || true
-/bin/modprobe udf 2>/dev/null || true
+# (loop / isofs / udf already modprobed in the early bulk load above.)
 
 export TERM=linux
 
