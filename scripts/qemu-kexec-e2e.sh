@@ -109,6 +109,12 @@ if [ -x /sbin/losetup.util-linux ]; then
     /bin/ln -sf /sbin/losetup.util-linux /usr/sbin/losetup
 fi
 
+# Load filesystem + loop modules (ISO9660 is usually a module on
+# Ubuntu stock kernels — mount silently fails without this).
+/bin/modprobe loop 2>/dev/null || true
+/bin/modprobe isofs 2>/dev/null || true
+/bin/modprobe udf 2>/dev/null || true
+
 ISO_DEV=""
 for candidate in /dev/sr0 /dev/vda /dev/sda; do
     if [ -b "$candidate" ]; then

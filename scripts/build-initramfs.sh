@@ -97,6 +97,63 @@ if [[ -n "$UTIL_LOSETUP" && -f "$UTIL_LOSETUP" ]]; then
         copy_libs_placeholder="$STAGE_DIR/sbin/losetup.util-linux"
     fi
 fi
+
+# --- Kernel modules (isofs, loop, udf) ---------------------------------------
+# Modern Ubuntu distro kernels ship iso9660 support as a MODULE, not
+# built-in. Without loading it, `mount -t iso9660 /dev/loop0 /mnt` fails
+# even though the loop device exists. Ship the module tree so /init can
+# modprobe isofs before attempting ISO mounts.
+#
+# If AEGIS_KMOD_SRC is set, copy modules from there. Otherwise, copy from
+# the currently-running kernel's /lib/modules/$(uname -r)/. When the
+# target kernel in the deployment doesn't match the build host's kernel,
+# operators must override AEGIS_KMOD_SRC — we warn loudly.
+KMOD_SRC="${AEGIS_KMOD_SRC:-}"
+if [[ -z "$KMOD_SRC" ]]; then
+    # Pick the most recent /lib/modules/*/kernel/fs directory we can find.
+    for candidate in /lib/modules/*/kernel/fs; do
+        [[ -d "$candidate" ]] || continue
+        KMOD_SRC="${candidate%/kernel/fs}"
+    done
+fi
+if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
+    KVER=$(basename "$KMOD_SRC")
+    log "shipping kernel modules from $KMOD_SRC (kernel $KVER)"
+    MOD_DEST="$STAGE_DIR/lib/modules/$KVER"
+    install -d "$MOD_DEST/kernel/fs/isofs"
+    install -d "$MOD_DEST/kernel/fs/udf"
+    install -d "$MOD_DEST/kernel/drivers/block"
+    # Each module may be .ko or .ko.zst depending on compression. Ship
+    # whatever the source kernel has.
+    for mod in isofs/isofs udf/udf; do
+        for ext in ko ko.zst ko.xz; do
+            src="$KMOD_SRC/kernel/fs/$mod.$ext"
+            if [[ -f "$src" ]]; then
+                install -m 0644 "$src" "$MOD_DEST/kernel/fs/$mod.$ext"
+                break
+            fi
+        done
+    done
+    for mod in loop; do
+        for ext in ko ko.zst ko.xz; do
+            src="$KMOD_SRC/kernel/drivers/block/$mod.$ext"
+            if [[ -f "$src" ]]; then
+                install -m 0644 "$src" "$MOD_DEST/kernel/drivers/block/$mod.$ext"
+                break
+            fi
+        done
+    done
+    # modules.dep, modules.builtin, modules.order, modules.symbols are
+    # needed by modprobe to resolve deps. Ship the files; they're small.
+    for metafile in modules.dep modules.dep.bin modules.alias modules.alias.bin \
+                    modules.builtin modules.builtin.alias.bin modules.order; do
+        [[ -f "$KMOD_SRC/$metafile" ]] && \
+            install -m 0644 "$KMOD_SRC/$metafile" "$MOD_DEST/$metafile"
+    done
+else
+    log "WARNING: no kernel modules source found; iso9660 mounts will fail"
+    log "  set AEGIS_KMOD_SRC=/lib/modules/<kver> if your target kernel needs modules"
+fi
 # Applets. Covered: mount, umount, mkdir, ls, sh, cat, mdev.
 # rescue-tui doesn't call these directly — they exist for the init script
 # below and for emergency shell fallback.
@@ -185,6 +242,17 @@ if [ -x /sbin/losetup.util-linux ]; then
 else
     export PATH=/usr/bin:/usr/sbin:/bin:/sbin
 fi
+
+# Load ISO9660 / UDF filesystem modules. On most distro kernels these
+# are modules (not built-in); without them, ISO discovery's mount step
+# silently fails. modprobe scans /lib/modules/$(uname -r)/ which
+# build-initramfs.sh populated from the build-host kernel. If the
+# deployment kernel doesn't match, operator can rebuild with
+# AEGIS_KMOD_SRC override.
+/bin/modprobe loop 2>/dev/null || true
+/bin/modprobe isofs 2>/dev/null || true
+/bin/modprobe udf 2>/dev/null || true
+
 export TERM=linux
 
 # Hand off. On clean quit, drop to a shell so the user isn't staring at
