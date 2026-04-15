@@ -206,16 +206,23 @@ fn event_loop<B: ratatui::backend::Backend>(
     }
 }
 
+/// Find the first ISO whose path contains `needle` (substring match on the
+/// absolute path). Pure helper for `AEGIS_AUTO_KEXEC`; extracted for unit
+/// testing without spinning up QEMU. (#54)
+fn find_auto_kexec_target(isos: &[iso_probe::DiscoveredIso], needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    isos.iter()
+        .position(|iso| iso.iso_path.to_string_lossy().contains(needle))
+}
+
 /// Non-interactive kexec path for automation. Matches the first ISO whose
 /// path contains `needle` (substring match on the absolute path), then calls
 /// `attempt_kexec`. Returns a meaningful exit code so CI can assert.
 fn run_auto_kexec(state: &AppState, needle: &str) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(needle, "AEGIS_AUTO_KEXEC mode");
-    let Some(idx) = state
-        .isos
-        .iter()
-        .position(|iso| iso.iso_path.to_string_lossy().contains(needle))
-    else {
+    let Some(idx) = find_auto_kexec_target(&state.isos, needle) else {
         tracing::error!(needle, "AEGIS_AUTO_KEXEC: no ISO path matched substring");
         return Err(format!("AEGIS_AUTO_KEXEC: no match for '{needle}'").into());
     };
@@ -392,5 +399,50 @@ mod tests {
                 PathBuf::from("/c"),
             ]
         );
+    }
+
+    fn fake_iso_at(path: &str) -> iso_probe::DiscoveredIso {
+        iso_probe::DiscoveredIso {
+            iso_path: PathBuf::from(path),
+            label: path.to_string(),
+            distribution: iso_probe::Distribution::Unknown,
+            kernel: PathBuf::from("vmlinuz"),
+            initrd: None,
+            cmdline: None,
+            quirks: vec![],
+            hash_verification: iso_probe::HashVerification::NotPresent,
+            signature_verification: iso_probe::SignatureVerification::NotPresent,
+            size_bytes: None,
+        }
+    }
+
+    #[test]
+    fn find_auto_kexec_target_returns_none_when_no_match() {
+        let isos = vec![fake_iso_at("/run/media/ubuntu.iso")];
+        assert!(find_auto_kexec_target(&isos, "fedora").is_none());
+    }
+
+    #[test]
+    fn find_auto_kexec_target_returns_first_substring_match() {
+        let isos = vec![
+            fake_iso_at("/run/media/ubuntu-24.04.iso"),
+            fake_iso_at("/run/media/fedora-39.iso"),
+            fake_iso_at("/run/media/fedora-40.iso"),
+        ];
+        assert_eq!(find_auto_kexec_target(&isos, "fedora"), Some(1));
+    }
+
+    #[test]
+    fn find_auto_kexec_target_returns_none_for_empty_needle() {
+        // Empty needle would match every path via String::contains; reject
+        // explicitly so AEGIS_AUTO_KEXEC="" doesn't silently boot the first
+        // ISO it finds.
+        let isos = vec![fake_iso_at("/run/media/anything.iso")];
+        assert!(find_auto_kexec_target(&isos, "").is_none());
+    }
+
+    #[test]
+    fn find_auto_kexec_target_handles_empty_iso_list() {
+        assert!(find_auto_kexec_target(&[], "anything").is_none());
     }
 }
