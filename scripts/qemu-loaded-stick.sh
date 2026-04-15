@@ -26,6 +26,7 @@ INTERACTIVE=0
 KEEP=0
 DRY_RUN=0
 SIZE_MB=""
+ATTACH="virtio"  # virtio | sata | usb
 
 usage() {
     cat <<USAGE
@@ -34,6 +35,13 @@ Usage: $0 [options]
   -d, --iso-dir DIR   directory of .iso files to load (default: ./test-isos)
   -s, --size MB       disk image size in MiB
                       (default: max(2048, ceil(1.5 * sum_of_iso_sizes)))
+  -a, --attach MODE   how to attach the stick to the VM:
+                        virtio  paravirtual virtio-blk (default, fastest,
+                                needs no storage modules in initramfs)
+                        sata    AHCI SATA — exercises ahci.ko path that
+                                real desktops and laptops use
+                        usb     usb-storage on xHCI — closest match for a
+                                real USB stick plugged into a host
   -i, --interactive   QEMU GTK display instead of -nographic serial
   -k, --keep          keep the built image after exit (default: cleanup)
       --dry-run       print the QEMU invocation, do not run
@@ -45,6 +53,7 @@ while (( $# > 0 )); do
     case "$1" in
         -d|--iso-dir)     ISO_DIR="$2"; shift 2 ;;
         -s|--size)        SIZE_MB="$2"; shift 2 ;;
+        -a|--attach)      ATTACH="$2"; shift 2 ;;
         -i|--interactive) INTERACTIVE=1; shift ;;
         -k|--keep)        KEEP=1; shift ;;
         --dry-run)        DRY_RUN=1; shift ;;
@@ -164,6 +173,34 @@ chmod 0644 "$WORK/vars.fd"
 display_args=(-nographic -serial mon:stdio)
 (( INTERACTIVE )) && display_args=(-display gtk -serial stdio)
 
+case "$ATTACH" in
+    virtio)
+        attach_args=(
+            -drive "if=none,id=stick,format=raw,file=$IMG"
+            -device "virtio-blk-pci,drive=stick"
+        )
+        ;;
+    sata|ahci)
+        attach_args=(
+            -device ahci,id=ahci
+            -drive "if=none,id=stick,format=raw,file=$IMG"
+            -device "ide-hd,bus=ahci.0,drive=stick"
+        )
+        ;;
+    usb)
+        attach_args=(
+            -device qemu-xhci,id=xhci
+            -drive "if=none,id=stick,format=raw,file=$IMG"
+            -device "usb-storage,bus=xhci.0,drive=stick"
+        )
+        ;;
+    *)
+        echo "unknown --attach mode: $ATTACH (expected virtio|sata|usb)" >&2
+        exit 2
+        ;;
+esac
+log "attach mode: $ATTACH"
+
 QEMU_ARGS=(
     qemu-system-x86_64
     "${display_args[@]}"
@@ -172,8 +209,7 @@ QEMU_ARGS=(
     -m 2048M
     -drive "if=pflash,format=raw,unit=0,file=$OVMF_CODE,readonly=on"
     -drive "if=pflash,format=raw,unit=1,file=$WORK/vars.fd"
-    -drive "if=none,id=stick,format=raw,file=$IMG"
-    -device virtio-blk-pci,drive=stick
+    "${attach_args[@]}"
     -boot order=c
 )
 
