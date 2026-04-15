@@ -5,6 +5,7 @@ members = [
     "crates/iso-probe",
     "crates/rescue-tui",
     "crates/kexec-loader",
+    "crates/aegis-fitness",
 ]
 exclude = ["crates/iso-parser/fuzz"]
 
