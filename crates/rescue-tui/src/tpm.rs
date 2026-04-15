@@ -80,7 +80,9 @@ pub fn compute_measurement(iso_path: &Path, cmdline: &str) -> [u8; 32] {
 /// - [`TpmError::ToolFailed`] — the tool ran but refused the extend.
 pub fn extend_pcr(pcr: u32, measurement: &[u8; 32]) -> Result<String, TpmError> {
     if !Path::new("/dev/tpm0").exists() && !Path::new("/dev/tpmrm0").exists() {
-        return Err(TpmError::Unavailable("no /dev/tpm0 or /dev/tpmrm0".to_string()));
+        return Err(TpmError::Unavailable(
+            "no /dev/tpm0 or /dev/tpmrm0".to_string(),
+        ));
     }
     if Command::new("tpm2_pcrextend")
         .arg("--version")
