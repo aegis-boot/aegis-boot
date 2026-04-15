@@ -163,27 +163,67 @@ fn event_loop<B: ratatui::backend::Backend>(
             continue;
         }
 
-        // In the cmdline editor, typing characters (including 'q') should
-        // insert, not quit. Keep 'q' as global quit only outside the editor.
-        let in_editor = matches!(state.screen, Screen::EditCmdline { .. });
-        if !in_editor && key.code == KeyCode::Char('q') {
-            state.quit();
+        // ConfirmQuit modal swallows everything: y/Enter confirms exit,
+        // n/Esc cancels back to prior screen.
+        if matches!(state.screen, Screen::ConfirmQuit { .. }) {
+            match key.code {
+                KeyCode::Char('y' | 'Y') | KeyCode::Enter => state.confirm_quit(),
+                KeyCode::Char('n' | 'N' | 'q') | KeyCode::Esc => {
+                    state.cancel_quit();
+                }
+                _ => {}
+            }
             continue;
         }
 
-        match (&state.screen, key.code) {
-            (Screen::List { .. }, KeyCode::Up) => state.move_selection(-1),
-            (Screen::List { .. }, KeyCode::Down) => state.move_selection(1),
-            (Screen::List { .. }, KeyCode::Enter) => state.confirm_selection(),
+        // Help overlay swallows everything: ?/Esc/q dismisses.
+        if matches!(state.screen, Screen::Help { .. }) {
+            match key.code {
+                KeyCode::Char('?' | 'q') | KeyCode::Esc => state.close_help(),
+                _ => {}
+            }
+            continue;
+        }
 
-            (Screen::Confirm { .. }, KeyCode::Esc) => state.cancel_confirmation(),
+        let in_editor = matches!(state.screen, Screen::EditCmdline { .. });
+
+        // Global keys (not in cmdline editor):
+        //   q  → quit confirmation prompt (was instant exit before #85)
+        //   ?  → help overlay
+        if !in_editor {
+            match key.code {
+                KeyCode::Char('q') => {
+                    state.request_quit();
+                    continue;
+                }
+                KeyCode::Char('?') => {
+                    state.open_help();
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        match (&state.screen, key.code) {
+            // Vim navigation aliases for arrow keys (#85).
+            (Screen::List { .. }, KeyCode::Up | KeyCode::Char('k')) => state.move_selection(-1),
+            (Screen::List { .. }, KeyCode::Down | KeyCode::Char('j')) => state.move_selection(1),
+            (Screen::List { .. }, KeyCode::Char('g')) => state.move_to_first(),
+            (Screen::List { .. }, KeyCode::Char('G')) => state.move_to_last(),
+            (Screen::List { .. }, KeyCode::Enter | KeyCode::Char('l')) => {
+                state.confirm_selection();
+            }
+
+            (Screen::Confirm { .. }, KeyCode::Esc | KeyCode::Char('h')) => {
+                state.cancel_confirmation();
+            }
             (Screen::Confirm { .. }, KeyCode::Char('e')) => state.enter_cmdline_editor(),
             (Screen::Confirm { selected }, KeyCode::Enter) => {
                 let idx = *selected;
                 if state.is_kexec_blocked(idx) {
                     tracing::warn!(
                         idx,
-                        "rescue-tui: refused kexec — ISO carries NotKexecBootable quirk"
+                        "rescue-tui: refused kexec — ISO is kexec-blocked (quirk or verification failure)"
                     );
                     state.record_kexec_error(&kexec_loader::KexecError::UnsupportedImage);
                 } else {
@@ -198,8 +238,11 @@ fn event_loop<B: ratatui::backend::Backend>(
             (Screen::EditCmdline { .. }, KeyCode::Backspace) => state.cmdline_backspace(),
             (Screen::EditCmdline { .. }, KeyCode::Char(c)) => state.cmdline_insert(c),
 
-            (Screen::Error { .. }, _) => {
-                state.screen = Screen::List { selected: 0 };
+            // Error → return to List, preserving the ISO that failed
+            // so the operator doesn't have to re-navigate. (#85)
+            (Screen::Error { return_to, .. }, _) => {
+                let idx = *return_to;
+                state.screen = Screen::List { selected: idx };
             }
             _ => {}
         }

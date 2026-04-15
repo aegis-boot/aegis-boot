@@ -9,13 +9,57 @@ use ratatui::{
     Frame,
 };
 
-use crate::state::{quirks_summary, AppState, Screen};
+use crate::state::{quirks_summary, AppState, Screen, SecureBootStatus};
 use crate::theme::Theme;
 
 /// Render the current frame for the given state.
+///
+/// Layout (#85):
+///
+/// ```text
+/// ┌──────────────────────────────────────────────────────┐
+/// │  aegis-boot v0.7.1     SB:enforcing  TPM:available   │ <- header
+/// ├──────────────────────────────────────────────────────┤
+/// │                                                      │
+/// │              (current screen body)                   │ <- body
+/// │                                                      │
+/// ├──────────────────────────────────────────────────────┤
+/// │  [↑↓/jk] Move  [Enter] Boot  [/] Filter  [?] Help    │ <- footer
+/// └──────────────────────────────────────────────────────┘
+/// ```
 pub fn draw(frame: &mut Frame<'_>, state: &AppState) {
     let area = frame.area();
-    match &state.screen {
+    let chrome = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // header banner
+            Constraint::Min(3),    // body
+            Constraint::Length(1), // footer
+        ])
+        .split(area);
+    let (header_area, body_area, footer_area) = (chrome[0], chrome[1], chrome[2]);
+
+    draw_header(frame, header_area, state);
+    draw_body(frame, body_area, state);
+    draw_footer(frame, footer_area, state);
+
+    // Overlays draw on top of everything.
+    if let Screen::Help { .. } = &state.screen {
+        draw_help_overlay(frame, area, state);
+    }
+    if let Screen::ConfirmQuit { .. } = &state.screen {
+        draw_confirm_quit_overlay(frame, area, state);
+    }
+}
+
+fn draw_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    // Help and ConfirmQuit overlays draw the prior screen underneath
+    // for context, then layer on top.
+    let effective = match &state.screen {
+        Screen::Help { prior } | Screen::ConfirmQuit { prior } => prior.as_ref(),
+        other => other,
+    };
+    match effective {
         Screen::List { selected } => draw_list(frame, area, state, *selected),
         Screen::Confirm { selected } => draw_confirm(frame, area, state, *selected),
         Screen::EditCmdline {
@@ -23,21 +67,157 @@ pub fn draw(frame: &mut Frame<'_>, state: &AppState) {
             buffer,
             cursor,
         } => draw_edit_cmdline(frame, area, state, *selected, buffer, *cursor),
-        Screen::Error { message, remedy } => draw_error(frame, area, message, remedy.as_deref()),
-        Screen::Quitting => {}
+        Screen::Error {
+            message, remedy, ..
+        } => draw_error(frame, area, message, remedy.as_deref()),
+        Screen::Quitting | Screen::Help { .. } | Screen::ConfirmQuit { .. } => {}
     }
 }
 
-fn draw_list(frame: &mut Frame<'_>, area: Rect, state: &AppState, selected: usize) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(2)])
-        .split(area);
+fn draw_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let version = env!("CARGO_PKG_VERSION");
+    let sb_color = match state.secure_boot {
+        SecureBootStatus::Enforcing => state.theme.success,
+        SecureBootStatus::Disabled => state.theme.error,
+        SecureBootStatus::Unknown => state.theme.warning,
+    };
+    let header = Line::from(vec![
+        Span::styled(
+            format!(" aegis-boot v{version} "),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(state.secure_boot.summary(), Style::default().fg(sb_color)),
+        Span::raw("  "),
+        Span::styled(
+            state.tpm.summary(),
+            Style::default().fg(state.theme.success),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(header), area);
+}
 
+fn draw_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    // Footer hints depend on the underlying screen, not the overlay.
+    let effective = match &state.screen {
+        Screen::Help { prior } | Screen::ConfirmQuit { prior } => prior.as_ref(),
+        other => other,
+    };
+    let hint = match effective {
+        Screen::List { .. } => " [↑↓/jk] Move  [g/G] First/Last  [Enter] Boot  [?] Help  [q] Quit",
+        Screen::Confirm { .. } => {
+            " [Enter] kexec  [e] Edit cmdline  [Esc/h] Back  [?] Help  [q] Quit"
+        }
+        Screen::EditCmdline { .. } => " [Enter] Save  [Esc] Cancel  [←/→] Move  [Backspace] Delete",
+        Screen::Error { .. } => " Press any key to return to the list  ·  [q] Quit",
+        Screen::Quitting | Screen::Help { .. } | Screen::ConfirmQuit { .. } => "",
+    };
+    frame.render_widget(Paragraph::new(hint), area);
+}
+
+/// Single-character status glyph for a list row, encoding the worst
+/// security state. Visible in monochrome themes (no color reliance).
+/// (#85, k9s/dialog pattern.)
+fn status_glyph(iso: &iso_probe::DiscoveredIso) -> &'static str {
+    use iso_probe::{HashVerification as H, Quirk, SignatureVerification as S};
+    if iso.quirks.contains(&Quirk::NotKexecBootable) {
+        return "[X]"; // can't kexec at all
+    }
+    if matches!(iso.hash_verification, H::Mismatch { .. }) {
+        return "[!]"; // tampered
+    }
+    if matches!(iso.signature_verification, S::Forged { .. }) {
+        return "[!]"; // crypto fail
+    }
+    if matches!(iso.signature_verification, S::Verified { .. }) {
+        return "[+]"; // signed + trusted
+    }
+    if matches!(iso.hash_verification, H::Verified { .. }) {
+        return "[~]"; // hash ok, sig absent
+    }
+    "[ ]"
+}
+
+fn draw_help_overlay(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    // Center a 60x18 panel.
+    let w = area.width.min(70);
+    let h = area.height.min(20);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let panel = Rect::new(x, y, w, h);
+    let lines = vec![
+        Line::from(Span::styled(
+            "Keybindings",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(" Global"),
+        Line::from("   ?         this help"),
+        Line::from("   q         quit (with confirmation)"),
+        Line::from(""),
+        Line::from(" List screen"),
+        Line::from("   ↑ ↓ / j k     move selection"),
+        Line::from("   g / G         first / last entry"),
+        Line::from("   Enter / l     confirm selection"),
+        Line::from(""),
+        Line::from(" Confirm screen"),
+        Line::from("   Enter         kexec into the ISO"),
+        Line::from("   e             edit kernel cmdline"),
+        Line::from("   Esc / h       back to list"),
+        Line::from(""),
+        Line::from(" Status glyphs on list rows"),
+        Line::from("   [+] verified  [~] hash-only  [ ] unknown"),
+        Line::from("   [!] tampered/forged  [X] not kexec-bootable"),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Esc or ? to dismiss",
+            Style::default().fg(state.theme.warning),
+        )),
+    ];
+    let block = Block::default().borders(Borders::ALL).title(" Help (#85) ");
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        panel,
+    );
+}
+
+fn draw_confirm_quit_overlay(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let w = area.width.min(50);
+    let h = 7;
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let panel = Rect::new(x, y, w, h);
+    let lines = vec![
+        Line::from(Span::styled(
+            "Quit aegis-boot?",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("This will reboot the machine."),
+        Line::from(""),
+        Line::from(Span::styled(
+            " [y/Enter] yes    [n/Esc/q] cancel",
+            Style::default().fg(state.theme.warning),
+        )),
+    ];
+    let block = Block::default().borders(Borders::ALL).title(" Confirm ");
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        panel,
+    );
+}
+
+fn draw_list(frame: &mut Frame<'_>, area: Rect, state: &AppState, selected: usize) {
     if state.isos.is_empty() {
-        let empty = Paragraph::new("No bootable ISOs found.\nPress q to quit.")
-            .block(Block::default().borders(Borders::ALL).title("aegis-boot"));
-        frame.render_widget(empty, chunks[0]);
+        let empty = Paragraph::new(
+            "No bootable ISOs found.\n\nPress q to quit, or check that AEGIS_ISO_ROOTS\npoints at a directory containing .iso files.",
+        )
+        .block(Block::default().borders(Borders::ALL).title("aegis-boot"));
+        frame.render_widget(empty, area);
         return;
     }
 
@@ -45,31 +225,26 @@ fn draw_list(frame: &mut Frame<'_>, area: Rect, state: &AppState, selected: usiz
         .isos
         .iter()
         .map(|iso| {
+            let glyph = status_glyph(iso);
             let qs = quirks_summary(iso);
             let line = if qs.is_empty() {
-                format!("{}  ({})", iso.label, iso.distribution_name())
+                format!("{glyph} {}  ({})", iso.label, iso.distribution_name())
             } else {
-                format!("{}  ({})  {}", iso.label, iso.distribution_name(), qs)
+                format!("{glyph} {}  ({})  {qs}", iso.label, iso.distribution_name())
             };
             ListItem::new(line)
         })
         .collect();
 
+    let title = format!(" aegis-boot — pick an ISO ({} found) ", state.isos.len());
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("aegis-boot — pick an ISO"),
-        )
+        .block(Block::default().borders(Borders::ALL).title(title))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("> ");
 
     let mut list_state = ListState::default();
     list_state.select(Some(selected));
-    frame.render_stateful_widget(list, chunks[0], &mut list_state);
-
-    let help = Paragraph::new("↑/↓: navigate · Enter: select · q: quit");
-    frame.render_widget(help, chunks[1]);
+    frame.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn draw_confirm(frame: &mut Frame<'_>, area: Rect, state: &AppState, selected: usize) {
@@ -136,10 +311,15 @@ fn draw_confirm(frame: &mut Frame<'_>, area: Rect, state: &AppState, selected: u
             signature_span(&iso.signature_verification, &state.theme),
         ]),
         Line::from(""),
+        // Per-screen action hint kept inline to make BLOCKED state
+        // unmissable; full keybind list is in the persistent footer.
         Line::from(if state.is_kexec_blocked(selected) {
-            "Enter: BLOCKED (not kexec-bootable) · e: edit cmdline · Esc: cancel"
+            Span::styled(
+                "Enter: BLOCKED — verification or quirk failure",
+                Style::default().fg(state.theme.error),
+            )
         } else {
-            "Enter: kexec · e: edit cmdline · Esc: cancel"
+            Span::raw("Enter: kexec   ·   e: edit kernel cmdline   ·   Esc: back to list")
         }),
     ];
     let title = if state.is_kexec_blocked(selected) {

@@ -30,12 +30,29 @@ pub enum Screen {
         /// Byte-offset cursor position within the buffer.
         cursor: usize,
     },
-    /// Showing a fatal-or-classified error after attempted kexec.
+    /// Showing a fatal-or-classified error after attempted kexec. The
+    /// `return_to` index lets the operator return to the failed ISO row
+    /// rather than the top of the list. (#85)
     Error {
         /// User-facing diagnostic copied from [`error_diagnostic`].
         message: String,
         /// User-facing remedy hint, if any.
         remedy: Option<String>,
+        /// Index of the ISO whose kexec attempt produced this error, so
+        /// returning to the List preserves the operator's place.
+        return_to: usize,
+    },
+    /// Help overlay (`?` from any non-edit screen). Stores the screen
+    /// to return to so dismissal restores prior state. (#85)
+    Help {
+        /// Boxed screen to restore on dismiss; boxed to keep the
+        /// `Help` variant the same size as the others.
+        prior: Box<Screen>,
+    },
+    /// Quit confirmation prompt. (#85 — was instant exit before.)
+    ConfirmQuit {
+        /// Boxed screen to restore on cancel.
+        prior: Box<Screen>,
     },
     /// User asked to quit; main loop should exit cleanly.
     Quitting,
@@ -53,6 +70,90 @@ pub struct AppState {
     pub cmdline_overrides: std::collections::HashMap<usize, String>,
     /// Active color theme (resolved from `AEGIS_THEME` env var).
     pub theme: Theme,
+    /// Secure Boot enforcement status, detected once at startup.
+    /// Rendered in the persistent header banner. (#85)
+    pub secure_boot: SecureBootStatus,
+    /// TPM availability, detected once at startup. Rendered in the
+    /// persistent header banner. (#85)
+    pub tpm: TpmStatus,
+}
+
+/// Coarse Secure Boot enforcement state, detected once at startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecureBootStatus {
+    /// EFI variable says SB is enforcing.
+    Enforcing,
+    /// EFI variable present but SB disabled / setup mode.
+    Disabled,
+    /// Couldn't read EFI vars (not booted via UEFI, or efivars not mounted).
+    Unknown,
+}
+
+/// TPM availability for pre-kexec PCR measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TpmStatus {
+    /// `/dev/tpm0` or `/dev/tpmrm0` present.
+    Available,
+    /// No TPM device exposed.
+    Absent,
+}
+
+impl SecureBootStatus {
+    /// Detect SB status from /sys/firmware/efi/efivars. Best-effort —
+    /// returns Unknown on any read error so the TUI can boot anywhere.
+    #[must_use]
+    pub fn detect() -> Self {
+        // EFI var format: 4 bytes attributes, 1 byte data (0/1).
+        let candidates = [
+            "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c",
+            "/sys/firmware/efi/efivars/SecureBoot",
+        ];
+        for path in candidates {
+            if let Ok(bytes) = std::fs::read(path) {
+                if let Some(&value) = bytes.get(4) {
+                    return if value == 1 {
+                        Self::Enforcing
+                    } else {
+                        Self::Disabled
+                    };
+                }
+            }
+        }
+        Self::Unknown
+    }
+
+    /// Short user-facing label for the TUI header banner.
+    #[must_use]
+    pub fn summary(self) -> &'static str {
+        match self {
+            Self::Enforcing => "SB:enforcing",
+            Self::Disabled => "SB:disabled",
+            Self::Unknown => "SB:unknown",
+        }
+    }
+}
+
+impl TpmStatus {
+    /// Detect TPM presence by checking for `/dev/tpm*` device nodes.
+    #[must_use]
+    pub fn detect() -> Self {
+        if std::path::Path::new("/dev/tpm0").exists()
+            || std::path::Path::new("/dev/tpmrm0").exists()
+        {
+            Self::Available
+        } else {
+            Self::Absent
+        }
+    }
+
+    /// Short user-facing label for the TUI header banner.
+    #[must_use]
+    pub fn summary(self) -> &'static str {
+        match self {
+            Self::Available => "TPM:available",
+            Self::Absent => "TPM:none",
+        }
+    }
 }
 
 impl AppState {
@@ -64,6 +165,8 @@ impl AppState {
             screen: Screen::List { selected: 0 },
             cmdline_overrides: std::collections::HashMap::new(),
             theme: Theme::default_theme(),
+            secure_boot: SecureBootStatus::detect(),
+            tpm: TpmStatus::detect(),
         }
     }
 
@@ -188,6 +291,26 @@ impl AppState {
         *cursor = new_cursor;
     }
 
+    /// Jump to the first row (vim `g`). No-op outside the List screen
+    /// or on an empty list. (#85)
+    pub fn move_to_first(&mut self) {
+        if let Screen::List { selected } = &mut self.screen {
+            if !self.isos.is_empty() {
+                *selected = 0;
+            }
+        }
+    }
+
+    /// Jump to the last row (vim `G`). No-op outside the List screen
+    /// or on an empty list. (#85)
+    pub fn move_to_last(&mut self) {
+        if let Screen::List { selected } = &mut self.screen {
+            if !self.isos.is_empty() {
+                *selected = self.isos.len() - 1;
+            }
+        }
+    }
+
     /// Advance the highlighted row up (negative) or down (positive), saturating
     /// at list bounds.
     pub fn move_selection(&mut self, delta: i32) {
@@ -228,17 +351,68 @@ impl AppState {
         // If the error occurred during a Confirm flow, enrich with
         // ISO-specific context (sibling key discovery for
         // SignatureRejected).
-        let iso = match &self.screen {
+        let (iso, return_to) = match &self.screen {
             Screen::Confirm { selected } | Screen::EditCmdline { selected, .. } => {
-                self.isos.get(*selected)
+                (self.isos.get(*selected), *selected)
             }
-            _ => None,
+            _ => (None, 0),
         };
         let (message, remedy) = error_diagnostic_with_iso(err, iso);
-        self.screen = Screen::Error { message, remedy };
+        self.screen = Screen::Error {
+            message,
+            remedy,
+            return_to,
+        };
     }
 
-    /// Request a clean exit.
+    /// Open the help overlay over the current screen. (#85)
+    pub fn open_help(&mut self) {
+        // Don't stack — if already in Help, do nothing.
+        if matches!(self.screen, Screen::Help { .. }) {
+            return;
+        }
+        let prior = std::mem::replace(&mut self.screen, Screen::Quitting);
+        self.screen = Screen::Help {
+            prior: Box::new(prior),
+        };
+    }
+
+    /// Dismiss the help overlay and restore the prior screen.
+    pub fn close_help(&mut self) {
+        if let Screen::Help { prior } = std::mem::replace(&mut self.screen, Screen::Quitting) {
+            self.screen = *prior;
+        }
+    }
+
+    /// Open the quit-confirmation prompt over the current screen.
+    /// Idempotent — re-pressing `q` in the prompt does nothing. (#85)
+    pub fn request_quit(&mut self) {
+        if matches!(self.screen, Screen::ConfirmQuit { .. } | Screen::Quitting) {
+            return;
+        }
+        let prior = std::mem::replace(&mut self.screen, Screen::Quitting);
+        self.screen = Screen::ConfirmQuit {
+            prior: Box::new(prior),
+        };
+    }
+
+    /// Dismiss the quit prompt without exiting.
+    pub fn cancel_quit(&mut self) {
+        if let Screen::ConfirmQuit { prior } = std::mem::replace(&mut self.screen, Screen::Quitting)
+        {
+            self.screen = *prior;
+        }
+    }
+
+    /// Confirm exit — only call from `ConfirmQuit` screen. Direct exit.
+    pub fn confirm_quit(&mut self) {
+        self.screen = Screen::Quitting;
+    }
+
+    /// Legacy direct quit — kept for tests that exercise the terminal
+    /// state but no longer wired to a key. New code should call
+    /// [`Self::request_quit`] instead so the operator gets a confirmation.
+    #[cfg(test)]
     pub fn quit(&mut self) {
         self.screen = Screen::Quitting;
     }
@@ -555,6 +729,70 @@ mod tests {
         let mut s = AppState::new(vec![fake_iso("a")]);
         s.quit();
         assert_eq!(s.screen, Screen::Quitting);
+    }
+
+    // --- Tier 1 UX (#85) -----------------------------------------------
+
+    #[test]
+    fn request_quit_opens_confirm_overlay() {
+        let mut s = AppState::new(vec![fake_iso("a")]);
+        s.request_quit();
+        assert!(matches!(s.screen, Screen::ConfirmQuit { .. }));
+    }
+
+    #[test]
+    fn cancel_quit_restores_prior_screen() {
+        let mut s = AppState::new(vec![fake_iso("a")]);
+        s.confirm_selection();
+        s.request_quit();
+        s.cancel_quit();
+        assert!(matches!(s.screen, Screen::Confirm { selected: 0 }));
+    }
+
+    #[test]
+    fn confirm_quit_exits() {
+        let mut s = AppState::new(vec![fake_iso("a")]);
+        s.request_quit();
+        s.confirm_quit();
+        assert_eq!(s.screen, Screen::Quitting);
+    }
+
+    #[test]
+    fn open_help_overlays_prior_screen() {
+        let mut s = AppState::new(vec![fake_iso("a"), fake_iso("b")]);
+        s.move_selection(1);
+        s.open_help();
+        assert!(matches!(s.screen, Screen::Help { .. }));
+        s.close_help();
+        assert!(matches!(s.screen, Screen::List { selected: 1 }));
+    }
+
+    #[test]
+    fn move_to_first_jumps_to_zero() {
+        let mut s = AppState::new(vec![fake_iso("a"), fake_iso("b"), fake_iso("c")]);
+        s.move_selection(2);
+        assert_eq!(s.screen, Screen::List { selected: 2 });
+        s.move_to_first();
+        assert_eq!(s.screen, Screen::List { selected: 0 });
+    }
+
+    #[test]
+    fn move_to_last_jumps_to_max() {
+        let mut s = AppState::new(vec![fake_iso("a"), fake_iso("b"), fake_iso("c")]);
+        s.move_to_last();
+        assert_eq!(s.screen, Screen::List { selected: 2 });
+    }
+
+    #[test]
+    fn record_kexec_error_preserves_failed_selection() {
+        let mut s = AppState::new(vec![fake_iso("a"), fake_iso("b"), fake_iso("c")]);
+        s.move_selection(1);
+        s.confirm_selection();
+        s.record_kexec_error(&KexecError::SignatureRejected);
+        match s.screen {
+            Screen::Error { return_to, .. } => assert_eq!(return_to, 1),
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 
     #[test]
