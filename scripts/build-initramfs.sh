@@ -180,12 +180,32 @@ if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
         done
         return 1
     }
-    copy_module "kernel/fs/isofs/isofs" "$MOD_DEST/kernel/fs/isofs" \
-        || log "WARNING: isofs module not found"
-    copy_module "kernel/fs/udf/udf" "$MOD_DEST/kernel/fs/udf" \
-        || log "WARNING: udf module not found"
-    copy_module "kernel/drivers/block/loop" "$MOD_DEST/kernel/drivers/block" \
-        || log "WARNING: loop module not found"
+    # Distinguish "shipped as a module but we couldn't find it" (real
+    # warning) from "compiled into the kernel image" (no .ko exists, no
+    # action needed). Reads CONFIG_* from /boot/config-$KVER. Kernels
+    # 6.14+ ship loop as built-in (CONFIG_BLK_DEV_LOOP=y), so the
+    # previous "WARNING: loop module not found" was a false alarm. (#69)
+    KCONFIG="/boot/config-$KVER"
+    is_builtin() {
+        [[ -r "$KCONFIG" ]] && grep -q "^${1}=y$" "$KCONFIG"
+    }
+    try_module() {
+        local rel="$1" dest="$2" name="$3" kconfig_key="$4"
+        if copy_module "$rel" "$dest"; then
+            return 0
+        fi
+        if is_builtin "$kconfig_key"; then
+            log "$name is built-in to kernel $KVER (no module to ship)"
+        else
+            log "WARNING: $name module not found (CONFIG_$kconfig_key not set?)"
+        fi
+    }
+    try_module "kernel/fs/isofs/isofs" "$MOD_DEST/kernel/fs/isofs" \
+        "isofs" "CONFIG_ISO9660_FS"
+    try_module "kernel/fs/udf/udf" "$MOD_DEST/kernel/fs/udf" \
+        "udf" "CONFIG_UDF_FS"
+    try_module "kernel/drivers/block/loop" "$MOD_DEST/kernel/drivers/block" \
+        "loop" "CONFIG_BLK_DEV_LOOP"
     # Regenerate modules.dep so it references our decompressed .ko paths
     # (source kernel's modules.dep points at .ko.zst). depmod -b rebuilds
     # into the staged tree; no runtime kernel match needed.
