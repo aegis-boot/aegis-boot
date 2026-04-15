@@ -22,9 +22,13 @@ tracing = "0.1"
 libc = "0.2"
 
 [workspace.lints.rust]
-# `deny`, not `forbid`, so individual crates can narrowly opt into `unsafe`
-# for syscall FFI (kexec-loader). Every such crate must justify it per
-# module with `#[allow(unsafe_code)]` and document the invariant.
+# `deny`, not `forbid`, so kexec-loader can narrowly opt into `unsafe`
+# for syscall FFI via `#[allow(unsafe_code)]` with documented invariants.
+# Library crates that don't need any unsafe (iso-probe, rescue-tui,
+# aegis-fitness) override this in their own [lints.rust] to `forbid` —
+# stricter, and `forbid` cannot be opted out of even with #[allow(...)].
+# That per-crate duplication is intentional; cargo lints can't merge
+# partial overrides with workspace inheritance.
 unsafe_code = "deny"
 missing_docs = "warn"
 
