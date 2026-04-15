@@ -133,7 +133,20 @@ fn draw_trust_challenge(
         ]),
         Line::from(vec![
             Span::styled("You:  ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(buffer),
+            // Design-review fix #2: mismatch feedback. If the operator
+            // typed ≥4 chars and it's not the target token, render in
+            // error colour so they see the buffer is wrong before they
+            // hit Enter. Silent failure was a security-gate smell.
+            Span::styled(
+                buffer.to_string(),
+                if buffer.len() >= 4 && buffer != "boot" {
+                    Style::default()
+                        .fg(state.theme.error)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                },
+            ),
             Span::styled("│", Style::default().add_modifier(Modifier::SLOW_BLINK)),
         ]),
     ];
@@ -239,11 +252,25 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         SecureBootStatus::Disabled => state.theme.error,
         SecureBootStatus::Unknown => state.theme.warning,
     };
-    // Brand primary (steel blue) for the shield mark if the theme has
-    // one worth spending; fall back to default fg otherwise. Uses the
-    // aegis brand colour directly — renders across every theme.
+    // Design-review fix #3: TPM colour must reflect TPM state, not be
+    // hardcoded to green. A green "TPM:none" lies to the operator.
+    let tpm_color = match state.tpm {
+        crate::state::TpmStatus::Available => state.theme.success,
+        crate::state::TpmStatus::Absent => state.theme.warning,
+    };
+    // Brand primary (steel blue) for the shield mark. Uses the aegis
+    // brand colour directly — renders across every theme.
     let brand = ratatui::style::Color::Rgb(0x3B, 0x82, 0xF6);
-    let header = Line::from(vec![
+
+    // Design-review fix #1: degrade the header for narrow terminals
+    // instead of truncating mid-word. The tagline is the first thing
+    // to go; then TPM; then SB. The shield mark + name + version
+    // always survive.
+    //   ≥90 cols → mark + name + version + SB + TPM + tagline
+    //   ≥70 cols → mark + name + version + SB + TPM
+    //   ≥50 cols → mark + name + version + SB
+    //   <50 cols → mark + name + version
+    let mut spans = vec![
         Span::styled(
             "◆ ",
             Style::default().fg(brand).add_modifier(Modifier::BOLD),
@@ -252,21 +279,31 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             format!("aegis-boot v{version}"),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  "),
-        Span::styled(state.secure_boot.summary(), Style::default().fg(sb_color)),
-        Span::raw("  "),
-        Span::styled(
+    ];
+    if area.width >= 50 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            state.secure_boot.summary(),
+            Style::default().fg(sb_color),
+        ));
+    }
+    if area.width >= 70 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
             state.tpm.summary(),
-            Style::default().fg(state.theme.success),
-        ),
-        Span::raw("  "),
-        Span::styled(
+            Style::default().fg(tpm_color),
+        ));
+    }
+    if area.width >= 90 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
             "Signed boot. Any ISO. Your keys.",
             Style::default()
                 .fg(state.theme.success)
                 .add_modifier(Modifier::ITALIC | Modifier::DIM),
-        ),
-    ]);
+        ));
+    }
+    let header = Line::from(spans);
     frame.render_widget(Paragraph::new(header), area);
 }
 
