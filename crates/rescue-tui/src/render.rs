@@ -68,8 +68,10 @@ fn draw_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             cursor,
         } => draw_edit_cmdline(frame, area, state, *selected, buffer, *cursor),
         Screen::Error {
-            message, remedy, ..
-        } => draw_error(frame, area, message, remedy.as_deref()),
+            message,
+            remedy,
+            return_to,
+        } => draw_error(frame, area, state, *return_to, message, remedy.as_deref()),
         Screen::Verifying {
             selected,
             bytes,
@@ -272,7 +274,9 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             Screen::EditCmdline { .. } => {
                 " [Enter] Save  [Esc] Cancel  [←/→] Move  [Backspace] Delete"
             }
-            Screen::Error { .. } => " Press any key to return to the list  ·  [q] Quit",
+            Screen::Error { .. } => {
+                " [F10] Save evidence to AEGIS_ISOS  ·  any key = back  ·  [q] Quit"
+            }
             Screen::Verifying { .. } => " Verifying in background  ·  [Esc] Cancel",
             Screen::TrustChallenge { .. } => " Type `boot` + Enter to proceed  ·  [Esc] Cancel",
             Screen::Quitting | Screen::Help { .. } | Screen::ConfirmQuit { .. } => "",
@@ -771,29 +775,140 @@ fn humanize_size(bytes: Option<u64>) -> String {
     }
 }
 
-fn draw_error(frame: &mut Frame<'_>, area: Rect, message: &str, remedy: Option<&str>) {
+// memtest86+ single-frame evidence: a screenshot of this panel should
+// be a complete bug report — no external context needed. (#92)
+#[allow(clippy::too_many_lines)]
+fn draw_error(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &AppState,
+    return_to: usize,
+    message: &str,
+    remedy: Option<&str>,
+) {
+    let iso = state.isos.get(return_to);
+    let cmdline = state.effective_cmdline(return_to);
+    let measurement_hex = iso
+        .map(|i| hex::encode(crate::tpm::compute_measurement(&i.iso_path, &cmdline)))
+        .unwrap_or_default();
+
     let mut lines = vec![
-        Line::from(vec![Span::styled(
-            "kexec failed",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
+        Line::from(Span::styled(
+            "kexec failed — capture this screen for bug reports",
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(state.theme.error),
+        )),
         Line::from(""),
-        Line::from(message.to_string()),
+        Line::from(vec![
+            Span::styled(
+                "Diagnostic: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(message.to_string()),
+        ]),
     ];
     if let Some(r) = remedy {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled(
-            "Remedy:",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]));
-        lines.push(Line::from(r.to_string()));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Remedy:     ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(r.to_string()),
+        ]));
     }
+
+    // Evidence block — only if we have an ISO context.
+    if let Some(iso) = iso {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "── Evidence (memtest-style; one frame = one bug report) ──",
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Version:    ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!("aegis-boot v{}", env!("CARGO_PKG_VERSION"))),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "SB / TPM:   ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(
+                "{}  ·  {}",
+                state.secure_boot.summary(),
+                state.tpm.summary()
+            )),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "ISO label:  ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(iso.label.clone()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "ISO path:   ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(iso.iso_path.display().to_string()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Size:       ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(humanize_size(iso.size_bytes)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Distro:     ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(iso.distribution_name().to_string()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Verdict:    ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(trust_verdict(iso).label().to_string()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Cmdline:    ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(if cmdline.is_empty() {
+                "(none)".to_string()
+            } else {
+                cmdline
+            }),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Measured:   ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!("sha256:{measurement_hex}")),
+        ]));
+    }
+
     lines.push(Line::from(""));
-    lines.push(Line::from(
-        "Press q to quit, any other key to return to the list.",
-    ));
+    lines.push(Line::from(Span::styled(
+        "F10 = save log to AEGIS_ISOS  ·  any key = back to list  ·  q = quit",
+        Style::default().fg(state.theme.warning),
+    )));
     let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Error"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" kexec error "),
+        )
         .wrap(Wrap { trim: false });
     frame.render_widget(para, area);
 }
