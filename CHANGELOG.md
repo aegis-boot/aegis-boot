@@ -4,7 +4,19 @@ All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](
 
 ## [Unreleased]
 
-(no changes yet — this section captures work landing after v0.13.0)
+### Catalog + quality
+
+- **Catalog curation policy** ([#154](https://github.com/williamzujkowski/aegis-boot/issues/154)) — `docs/CATALOG_POLICY.md` formalizes the 5 inclusion criteria (HTTPS canonical URL, project-published signed SHA256SUMS, operator value, stable URL, honest SB posture), accepted categories, and the PR proposal process.
+- **Weekly catalog URL revalidation** ([#155](https://github.com/williamzujkowski/aegis-boot/issues/155)) — `scripts/catalog-revalidate.sh` + scheduled workflow checks every URL in the catalog via range-GET. Surfaced 25 broken URLs in the first run.
+- **Catalog trimmed to 6 verified entries** ([#159](https://github.com/williamzujkowski/aegis-boot/issues/159), closes [#156](https://github.com/williamzujkowski/aegis-boot/issues/156)) — removed 12 entries with broken URLs (sourceforge rewrites, point-release rotation, wrong sig_url patterns). Keeping only entries where all three URLs verify green. Entries will be re-added per #156 as URLs are fixed.
+
+### CI / distribution
+
+- **Homebrew formula validated in CI** ([#157](https://github.com/williamzujkowski/aegis-boot/issues/157)) — `brew audit + style + install + test` workflow runs on Formula changes and weekly. Formula ComponentsOrder fixed (`depends_on` before `on_linux`), `uses_from_macos "coreutils"` removed (not macOS-only).
+
+### Roadmap
+
+- **v1.2+ category-defining epic** ([#158](https://github.com/williamzujkowski/aegis-boot/issues/158)) — 5 capabilities beyond the v1.0/v1.1 roadmap: FIDO2-backed operator identity, post-kexec verifier + TPM quote, Sigstore Rekor integration, ephemeral compute bootstrapping, automotive/coreboot rescue mode. Ranked by category-redefinition impact.
 
 ## [0.13.0] — 2026-04-16
 
