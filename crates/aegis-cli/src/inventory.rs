@@ -213,13 +213,16 @@ fn mount_dev(dev: &Path) -> Result<Mount, String> {
         ));
     }
     let tmp = tempdir().ok_or_else(|| "mktemp failed".to_string())?;
+    // iocharset=utf8 (not cp437 — that's a codepage, not an iocharset;
+    // using cp437 as iocharset silently falls back to the default
+    // iso8859-1 and fails on kernels without nls_iso8859-1 loaded).
     let out = Command::new("sudo")
         .args([
             "mount",
             "-t",
             "vfat",
             "-o",
-            "rw,codepage=437,iocharset=cp437",
+            "rw,codepage=437,iocharset=utf8",
             &part.display().to_string(),
             &tmp.display().to_string(),
         ])
