@@ -12,20 +12,20 @@ class AegisBoot < Formula
   version "0.13.0"
   license any_of: ["Apache-2.0", "MIT"]
 
+  # Runtime dependencies the operator CLI shells out to. Listed
+  # explicitly so brew installs them; aegis-boot doctor will also
+  # verify them at runtime. Must precede `on_linux` per brew audit
+  # ComponentsOrder rule.
+  depends_on "curl"
+  depends_on "gnupg"
+  depends_on "gptfdisk" # provides sgdisk
+
   on_linux do
     on_intel do
       url "https://github.com/williamzujkowski/aegis-boot/releases/download/v0.13.0/aegis-boot-x86_64-linux"
       sha256 "7d8747c970ad59d79d73c298a6fbad3cdf41de32ea7e11cd97f41f3e23c21bcf"
     end
   end
-
-  # Runtime dependencies the operator CLI shells out to. Listed
-  # explicitly so brew installs them; aegis-boot doctor will also
-  # verify them at runtime.
-  depends_on "curl"
-  depends_on "gnupg"
-  depends_on "gptfdisk" # provides sgdisk
-  uses_from_macos "coreutils" # provides sha256sum (Linux always has it)
 
   def install
     if OS.linux? && Hardware::CPU.intel?
