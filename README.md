@@ -25,7 +25,7 @@ A signed UEFI Secure Boot rescue environment that lets operators pick any ISO fr
 
 </div>
 
-**Status:** v0.12.0 — operator CLI shipped; real-hardware shakedown validated on Alpine + Ubuntu under Secure Boot enforcing ([#109](https://github.com/williamzujkowski/aegis-boot/issues/109)). Multi-vendor real-hardware sweep (Framework / ThinkPad / Dell) gates v1.0.0 ([#51](https://github.com/williamzujkowski/aegis-boot/issues/51)).
+**Status:** v0.13.0 — best-in-class push: 5 new operator subcommands (`doctor`, `recommend`, `fetch`, `attest list/show`), cosign-signed prebuilt binaries, install one-liner, Homebrew tap, attestation receipts on every flash. Real-hardware shakedown validated on Alpine + Ubuntu under Secure Boot enforcing ([#109](https://github.com/williamzujkowski/aegis-boot/issues/109)). Multi-vendor real-hardware sweep (Framework / ThinkPad / Dell) gates v1.0.0 ([#51](https://github.com/williamzujkowski/aegis-boot/issues/51)).
 
 ## What it does
 
