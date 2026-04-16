@@ -10,6 +10,7 @@ USAGE:
   aegis-boot list [device]      Show ISOs on the stick
   aegis-boot add <iso> [device] Copy + validate an ISO
   aegis-boot doctor [--stick D] Health check (host + stick)
+  aegis-boot recommend [slug]   Curated catalog of known-good ISOs
   aegis-boot --version          Print version
   aegis-boot --help             This message
 ```
@@ -197,6 +198,56 @@ Stick checks:
 PASS = 10 points / WARN = 7 points / FAIL = 0 points / SKIP = not counted. Final score is `weight * 100 / total`, rounded. Bands: 90+ EXCELLENT, 70+ OK, 40+ DEGRADED, below 40 BROKEN.
 
 The `NEXT ACTION` line is set by the *first* FAIL row that has one — it's the single most important thing to fix before retrying.
+
+---
+
+---
+
+## `aegis-boot recommend`
+
+Browse the curated catalog of known-good ISOs that have been validated (or are vouched for by the project) under aegis-boot. Catalog entries point at the project's own canonical download URL + signed SHA256SUMS, so the trust anchor stays with the upstream project — aegis-boot just curates and helps you find the recipe.
+
+### Usage
+
+```bash
+aegis-boot recommend                       # browse the table
+aegis-boot recommend ubuntu-24.04-live-server   # show download + verify recipe
+aegis-boot recommend ubuntu                # prefix match (only if unambiguous)
+aegis-boot recommend --help
+```
+
+### Table view
+
+```
+Curated ISO catalog (13 entries):
+
+  SLUG                          NAME                                       SIZE  SECURE BOOT
+  ----------------------------  --------------------------------------  -------  ----------------------------
+  alpine-3.20-standard          Alpine Linux 3.20 Standard              198 MiB  ✗ unsigned (MOK needed)
+  archlinux-current             Arch Linux (current monthly)            1.2 GiB  ✗ unsigned (MOK needed)
+  clonezilla-live-stable        Clonezilla Live (stable)                380 MiB  ✓ signed (Clonezilla / DRBL)
+  ...
+  ubuntu-24.04-live-server      Ubuntu Server 24.04.2 LTS               2.5 GiB  ✓ signed (Canonical CA)
+  ubuntu-24.04-desktop          Ubuntu Desktop 24.04.2 LTS              5.7 GiB  ✓ signed (Canonical CA)
+```
+
+The `SECURE BOOT` column tells you whether the ISO's kernel will boot under enforcing Secure Boot without operator intervention:
+- ✓ **signed** — boots; the named CA is in shim's built-in keyring
+- ✗ **unsigned (MOK needed)** — boots only after the operator MOK-enrolls the distro's signing key (see [UNSIGNED_KERNEL.md](./UNSIGNED_KERNEL.md))
+
+### Detail view (single entry)
+
+`aegis-boot recommend <slug>` prints the project's canonical download URL, the URL of the project's signed `SHA256SUMS`, the URL of the GPG/minisign signature on `SHA256SUMS`, and a copy-pasteable recipe to download + verify + add to your stick.
+
+For unsigned-kernel entries (Alpine / Arch / NixOS), the recipe also includes the MOK-key placement step.
+
+### Why no SHA-256 in the catalog?
+
+Distros release point versions on a cadence that doesn't track our commits. Pinning a hash in the catalog would make most entries wrong within weeks of every release. The catalog points at the project's *signed* SHA256SUMS instead — whoever the project trusts to sign their releases is who we trust here. The trust anchor is the project's release-signing key, not aegis-boot's catalog.
+
+### Future: `aegis-boot fetch <slug>`
+
+The recipe is currently manual (curl, gpg, sha256sum, then `aegis-boot add`). A future `aegis-boot fetch <slug>` will automate it end-to-end. Tracked under [epic #136](https://github.com/williamzujkowski/aegis-boot/issues/136).
 
 ---
 

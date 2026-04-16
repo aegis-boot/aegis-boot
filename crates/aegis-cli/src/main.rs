@@ -1,10 +1,11 @@
 //! `aegis-boot` — operator CLI for aegis-boot.
 //!
 //! Subcommands:
-//!   * `flash`  — write aegis-boot to a USB stick (3-step guided)
-//!   * `add`    — copy + validate an ISO onto the stick
-//!   * `list`   — show ISOs on the stick with verification status
-//!   * `doctor` — diagnose host environment + a stick's health
+//!   * `flash`     — write aegis-boot to a USB stick (3-step guided)
+//!   * `add`       — copy + validate an ISO onto the stick
+//!   * `list`      — show ISOs on the stick with verification status
+//!   * `doctor`    — diagnose host environment + a stick's health
+//!   * `recommend` — curated catalog of known-good ISOs
 //!
 //! This replaces the developer workflow of running shell scripts
 //! manually. The binary is named `aegis-boot` so operators type
@@ -12,6 +13,7 @@
 
 #![forbid(unsafe_code)]
 
+mod catalog;
 mod detect;
 mod doctor;
 mod flash;
@@ -33,6 +35,7 @@ fn main() -> ExitCode {
         Some("list") => inventory::run_list(&args[1..]),
         Some("add") => inventory::run_add(&args[1..]),
         Some("doctor") => doctor::run(&args[1..]),
+        Some("recommend") => catalog::run(&args[1..]),
         Some("-h" | "--help" | "help") | None => {
             print_help();
             ExitCode::SUCCESS
@@ -57,11 +60,13 @@ fn print_help() {
     println!("  aegis-boot list [device]      Show ISOs on the stick");
     println!("  aegis-boot add <iso> [device] Copy + validate an ISO");
     println!("  aegis-boot doctor [--stick D] Health check (host + stick)");
+    println!("  aegis-boot recommend [slug]   Curated catalog of known-good ISOs");
     println!("  aegis-boot --version          Print version");
     println!("  aegis-boot --help             This message");
     println!();
     println!("EXAMPLES:");
     println!("  aegis-boot doctor             # quick environment + stick health");
+    println!("  aegis-boot recommend          # browse the curated ISO catalog");
     println!("  aegis-boot flash              # auto-detect removable drive");
     println!("  aegis-boot flash /dev/sdc     # specific drive");
     println!("  aegis-boot add ubuntu.iso     # validate + copy to stick");
