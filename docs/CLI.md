@@ -229,7 +229,7 @@ aegis-boot recommend --help
 ### Table view
 
 ```
-Curated ISO catalog (13 entries):
+Curated ISO catalog (18 entries):
 
   SLUG                          NAME                                       SIZE  SECURE BOOT
   ----------------------------  --------------------------------------  -------  ----------------------------
@@ -254,6 +254,10 @@ For unsigned-kernel entries (Alpine / Arch / NixOS), the recipe also includes th
 ### Why no SHA-256 in the catalog?
 
 Distros release point versions on a cadence that doesn't track our commits. Pinning a hash in the catalog would make most entries wrong within weeks of every release. The catalog points at the project's *signed* SHA256SUMS instead — whoever the project trusts to sign their releases is who we trust here. The trust anchor is the project's release-signing key, not aegis-boot's catalog.
+
+### Adding a new entry
+
+The curation criteria + how-to-propose process are documented separately in [docs/CATALOG_POLICY.md](./CATALOG_POLICY.md). Short version: HTTPS-served canonical URL, project-published signed SHA256SUMS, real operator value, stable URL, honest SB posture.
 
 ### See also: `aegis-boot fetch <slug>`
 
