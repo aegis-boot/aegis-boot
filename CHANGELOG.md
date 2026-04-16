@@ -4,6 +4,10 @@ All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](
 
 ## [Unreleased]
 
+(no changes yet — this section captures work landing after v0.13.0)
+
+## [0.13.0] — 2026-04-16
+
 The **best-in-class push** — what landed after v0.12.0 went out and the repo went public, working through epics #136 (operator + sysadmin reach), #137 (onboarding + discoverability), and #138 (quality gates).
 
 ### Operator surface area expansion (epic #136)

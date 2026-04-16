@@ -380,7 +380,7 @@ Matching logic: the destination mount path → owning device (from `/proc/mounts
 
 ## Versioning
 
-`aegis-boot --version` reports the workspace version (currently `0.12.0`). The CLI ships in lockstep with the rest of the workspace; `cargo install --path crates/aegis-cli` (or downloading a release binary) will give you a CLI that matches the on-stick rescue-tui.
+`aegis-boot --version` reports the workspace version (currently `0.13.0`). The CLI ships in lockstep with the rest of the workspace; `cargo install --path crates/aegis-cli` (or downloading a release binary) will give you a CLI that matches the on-stick rescue-tui.
 
 ## See also
 
