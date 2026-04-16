@@ -229,7 +229,7 @@ aegis-boot recommend --help
 ### Table view
 
 ```
-Curated ISO catalog (18 entries):
+Curated ISO catalog (6 entries):
 
   SLUG                          NAME                                       SIZE  SECURE BOOT
   ----------------------------  --------------------------------------  -------  ----------------------------

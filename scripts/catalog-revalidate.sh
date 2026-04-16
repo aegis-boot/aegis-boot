@@ -84,8 +84,11 @@ done < /tmp/catalog-urls.$$
 
 rm -f /tmp/catalog-urls.$$
 
+# `total` is the number of URL triples printed (one per valid Entry
+# block), so catalog entries = total / 3.
+entries=$((total / 3))
 echo
-echo "Checked $total URLs across $(awk '/slug:/ {c++} END {print c}' "$CATALOG") catalog entries."
+echo "Checked $total URLs across $entries catalog entries."
 if (( fail > 0 )); then
     echo "BROKEN: $fail URL(s) failed" >&2
     exit 1

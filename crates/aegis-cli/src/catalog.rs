@@ -87,6 +87,12 @@ pub struct Entry {
 /// getfedora.org, etc.). When point releases bump, the URL stays valid for
 /// at least one cycle; older releases tend to move to /old-releases/ paths.
 /// Update entries when a major version ships, not for every point release.
+// Only entries whose URLs verify under `scripts/catalog-revalidate.sh`
+// are listed here. Many speculative / upstream-rotted entries were
+// removed in a cleanup pass — see issue #156 + CATALOG_POLICY.md.
+//
+// When proposing an addition: run the revalidate script locally
+// before opening the PR and confirm all three URLs return 2xx.
 pub const CATALOG: &[Entry] = &[
     Entry {
         slug: "almalinux-9-minimal",
@@ -95,7 +101,12 @@ pub const CATALOG: &[Entry] = &[
         size_mib: 1700,
         iso_url: "https://repo.almalinux.org/almalinux/9/isos/x86_64/AlmaLinux-9-latest-x86_64-minimal.iso",
         sha256_url: "https://repo.almalinux.org/almalinux/9/isos/x86_64/CHECKSUM",
-        sig_url: "https://repo.almalinux.org/almalinux/9/isos/x86_64/CHECKSUM.asc",
+        // AlmaLinux ships a PGP-clearsigned CHECKSUM — the signature
+        // is embedded in the same file, no separate .asc exists.
+        // Pointing sig_url at the same CHECKSUM URL means revalidate
+        // sees OK; `aegis-boot fetch` will need clearsign-aware
+        // verification (tracked in fetch follow-up).
+        sig_url: "https://repo.almalinux.org/almalinux/9/isos/x86_64/CHECKSUM",
         sb: SbStatus::Signed("Red Hat / AlmaLinux"),
         purpose: "Free RHEL-rebuild minimal installer. Cross-distro kexec quirk possible.",
     },
@@ -111,83 +122,6 @@ pub const CATALOG: &[Entry] = &[
         purpose: "Minimal recovery / forensic shell. Tiny footprint.",
     },
     Entry {
-        slug: "archlinux-current",
-        name: "Arch Linux (current monthly)",
-        arch: "x86_64",
-        size_mib: 1200,
-        iso_url: "https://archlinux.org/iso/latest/archlinux-x86_64.iso",
-        sha256_url: "https://archlinux.org/iso/latest/sha256sums.txt",
-        sig_url: "https://archlinux.org/iso/latest/archlinux-x86_64.iso.sig",
-        sb: SbStatus::UnsignedNeedsMok,
-        purpose: "Rolling-release recovery shell with current kernels + tooling.",
-    },
-    Entry {
-        slug: "boot-repair-disk",
-        name: "Boot-Repair-Disk",
-        arch: "x86_64",
-        size_mib: 870,
-        iso_url: "https://sourceforge.net/projects/boot-repair-cd/files/latest/download",
-        sha256_url: "https://sourceforge.net/projects/boot-repair-cd/files/sha256sums.txt/download",
-        sig_url: "https://sourceforge.net/projects/boot-repair-cd/files/sha256sums.txt.asc/download",
-        sb: SbStatus::Signed("Yann MRN"),
-        purpose: "Single-purpose live USB for repairing damaged GRUB / EFI boot chains.",
-    },
-    Entry {
-        slug: "clonezilla-live-stable",
-        name: "Clonezilla Live (stable)",
-        arch: "x86_64",
-        size_mib: 380,
-        iso_url: "https://sourceforge.net/projects/clonezilla/files/clonezilla_live_stable/latest/download",
-        sha256_url: "https://sourceforge.net/projects/clonezilla/files/clonezilla_live_stable/latest/CHECKSUMS.txt",
-        sig_url: "https://sourceforge.net/projects/clonezilla/files/clonezilla_live_stable/latest/CHECKSUMS.txt.gpg",
-        sb: SbStatus::Signed("Clonezilla / DRBL"),
-        purpose: "Disk imaging + restore. The IR / migration workhorse.",
-    },
-    Entry {
-        slug: "debian-12-netinst",
-        name: "Debian 12 (Bookworm) netinst",
-        arch: "x86_64",
-        size_mib: 700,
-        iso_url: "https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso",
-        sha256_url: "https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/SHA256SUMS",
-        sig_url: "https://cdimage.debian.org/cdimage/release/current/amd64/iso-cd/SHA256SUMS.sign",
-        sb: SbStatus::Signed("Debian"),
-        purpose: "Stable Debian installer. Network install via the smallest ISO.",
-    },
-    Entry {
-        slug: "fedora-41-workstation",
-        name: "Fedora Workstation 41",
-        arch: "x86_64",
-        size_mib: 2400,
-        iso_url: "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Workstation/x86_64/iso/Fedora-Workstation-Live-x86_64-41-1.4.iso",
-        sha256_url: "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Workstation/x86_64/iso/Fedora-Workstation-41-1.4-x86_64-CHECKSUM",
-        sig_url: "https://getfedora.org/static/fedora.gpg",
-        sb: SbStatus::Signed("Fedora"),
-        purpose: "Full Fedora live + installer; signed under Fedora's CA.",
-    },
-    Entry {
-        slug: "gparted-live-stable",
-        name: "GParted Live (stable)",
-        arch: "x86_64",
-        size_mib: 480,
-        iso_url: "https://sourceforge.net/projects/gparted/files/gparted-live-stable/latest/download",
-        sha256_url: "https://sourceforge.net/projects/gparted/files/gparted-live-stable/latest/sha256sum.txt",
-        sig_url: "https://sourceforge.net/projects/gparted/files/gparted-live-stable/latest/sha256sum.txt.sig",
-        sb: SbStatus::Signed("GParted / Steven Shiau"),
-        purpose: "Partition surgery before installs / repairs. Boots fast.",
-    },
-    Entry {
-        slug: "kali-current",
-        name: "Kali Linux (current live)",
-        arch: "x86_64",
-        size_mib: 4400,
-        iso_url: "https://cdimage.kali.org/current/kali-linux-current-live-amd64.iso",
-        sha256_url: "https://cdimage.kali.org/current/SHA256SUMS",
-        sig_url: "https://cdimage.kali.org/current/SHA256SUMS.gpg",
-        sb: SbStatus::Signed("Offensive Security"),
-        purpose: "Pentest distro with extensive offensive tooling. >4GB → use ext4 data partition.",
-    },
-    Entry {
         slug: "linuxmint-22-cinnamon",
         name: "Linux Mint 22 Cinnamon",
         arch: "x86_64",
@@ -199,70 +133,17 @@ pub const CATALOG: &[Entry] = &[
         purpose: "Friendly Ubuntu-derived desktop. Common operator install target.",
     },
     Entry {
-        slug: "memtest86plus-7",
-        name: "Memtest86+ v7 (free)",
-        arch: "x86_64",
-        size_mib: 5,
-        iso_url: "https://memtest.org/download/v7.20/mt86plus_7.20.iso.zip",
-        sha256_url: "https://memtest.org/download/v7.20/SHA256SUMS",
-        sig_url: "https://memtest.org/download/v7.20/SHA256SUMS.gpg",
-        sb: SbStatus::Signed("Memtest86+"),
-        purpose: "RAM diagnostics. Standalone — does not kexec into Linux.",
-    },
-    Entry {
-        slug: "nixos-24.05-minimal",
-        name: "NixOS 24.05 Minimal",
-        arch: "x86_64",
-        size_mib: 950,
-        iso_url: "https://channels.nixos.org/nixos-24.05/latest-nixos-minimal-x86_64-linux.iso",
-        sha256_url: "https://channels.nixos.org/nixos-24.05/latest-nixos-minimal-x86_64-linux.iso.sha256",
-        sig_url: "https://channels.nixos.org/nixos-24.05/latest-nixos-minimal-x86_64-linux.iso.sig",
-        sb: SbStatus::UnsignedNeedsMok,
-        purpose: "Reproducible-system installer. Minimal image without graphical session.",
-    },
-    Entry {
-        slug: "opensuse-leap-15.6-netinstall",
-        name: "openSUSE Leap 15.6 NET Install",
-        arch: "x86_64",
-        size_mib: 250,
-        iso_url: "https://download.opensuse.org/distribution/leap/15.6/iso/openSUSE-Leap-15.6-NET-x86_64-Current.iso",
-        sha256_url: "https://download.opensuse.org/distribution/leap/15.6/iso/openSUSE-Leap-15.6-NET-x86_64-Current.iso.sha256",
-        sig_url: "https://download.opensuse.org/distribution/leap/15.6/iso/openSUSE-Leap-15.6-NET-x86_64-Current.iso.sha256.asc",
-        sb: SbStatus::Signed("openSUSE / SUSE"),
-        purpose: "openSUSE Leap network installer. Tiny ISO, full distro from network.",
-    },
-    Entry {
         slug: "rocky-9-minimal",
         name: "Rocky Linux 9 Minimal",
         arch: "x86_64",
         size_mib: 1900,
         iso_url: "https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9-latest-x86_64-minimal.iso",
         sha256_url: "https://download.rockylinux.org/pub/rocky/9/isos/x86_64/CHECKSUM",
-        sig_url: "https://download.rockylinux.org/pub/rocky/9/isos/x86_64/CHECKSUM.sig",
+        // Rocky ships a PGP-clearsigned CHECKSUM (same pattern as
+        // AlmaLinux). See the note on almalinux-9-minimal.
+        sig_url: "https://download.rockylinux.org/pub/rocky/9/isos/x86_64/CHECKSUM",
         sb: SbStatus::Signed("Rocky Linux"),
         purpose: "Free RHEL-rebuild minimal installer. Cross-distro kexec quirk possible.",
-    },
-    Entry {
-        slug: "systemrescue-current",
-        name: "SystemRescue (current)",
-        arch: "x86_64",
-        size_mib: 850,
-        iso_url: "https://www.system-rescue.org/releases/latest/iso/",
-        sha256_url: "https://www.system-rescue.org/releases/latest/iso/sha256sums.txt",
-        sig_url: "https://www.system-rescue.org/releases/latest/iso/sha256sums.txt.asc",
-        sb: SbStatus::Signed("SystemRescue"),
-        purpose: "All-purpose rescue: filesystems, network, recovery, partitioning.",
-    },
-    Entry {
-        slug: "tails-current",
-        name: "Tails (current)",
-        arch: "x86_64",
-        size_mib: 1400,
-        iso_url: "https://download.tails.net/tails/stable/tails-amd64-LATEST/tails-amd64-LATEST.iso",
-        sha256_url: "https://tails.net/install/v2/Tails/amd64/stable/latest.json",
-        sig_url: "https://tails.net/tails-signing.key",
-        sb: SbStatus::Signed("Tails"),
-        purpose: "Amnesic privacy live OS. Routes through Tor by default.",
     },
     Entry {
         slug: "ubuntu-24.04-live-server",
@@ -440,12 +321,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_has_at_least_ten_entries() {
-        // Sanity gate: someone shouldn't accidentally empty out the catalog
-        // and have CI still pass. 10 is well below the current size; bump
-        // when the catalog grows enough to make this floor meaningful.
+    fn catalog_has_at_least_four_entries() {
+        // Sanity gate: someone shouldn't accidentally empty out the
+        // catalog and have CI still pass. 4 matches the post-rot-cleanup
+        // minimum (#156) — only entries with fully-verified URLs ship.
+        // Raise this floor in a dedicated PR as the catalog grows back.
         assert!(
-            CATALOG.len() >= 10,
+            CATALOG.len() >= 4,
             "catalog shrank to {} entries — intentional?",
             CATALOG.len()
         );
@@ -505,9 +387,10 @@ mod tests {
 
     #[test]
     fn find_entry_prefix_when_unique() {
-        // "memtest86plus-7" should match a unique prefix
-        let e = find_entry("memtest").expect("memtest prefix matches uniquely");
-        assert!(e.slug.starts_with("memtest"));
+        // "almalinux-9-minimal" is the only entry starting with "alma"
+        // in the current (post-cleanup, #156) catalog.
+        let e = find_entry("alma").expect("alma prefix matches uniquely");
+        assert!(e.slug.starts_with("alma"));
     }
 
     #[test]
