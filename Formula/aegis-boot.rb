@@ -9,13 +9,13 @@
 class AegisBoot < Formula
   desc "Signed UEFI Secure Boot rescue environment for booting any ISO from USB"
   homepage "https://github.com/williamzujkowski/aegis-boot"
-  version "0.12.0"
+  version "0.13.0"
   license any_of: ["Apache-2.0", "MIT"]
 
   on_linux do
     on_intel do
-      url "https://github.com/williamzujkowski/aegis-boot/releases/download/v0.12.0/aegis-boot-x86_64-linux"
-      sha256 "2c1b15f423823532766859ee70f929aeebce05cae5901fa080512ca7d1340953"
+      url "https://github.com/williamzujkowski/aegis-boot/releases/download/v0.13.0/aegis-boot-x86_64-linux"
+      sha256 "7d8747c970ad59d79d73c298a6fbad3cdf41de32ea7e11cd97f41f3e23c21bcf"
     end
   end
 
