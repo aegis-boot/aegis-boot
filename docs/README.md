@@ -7,6 +7,7 @@
 | **Operator** | [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) | Common errors and fixes (errno 61, won't-boot, mount issues, MOK pitfalls) |
 | **Operator** | [`UNSIGNED_KERNEL.md`](./UNSIGNED_KERNEL.md) | What to do when an ISO ships an unsigned kernel (Alpine, Arch, NixOS) |
 | **Operator** | [`USB_LAYOUT.md`](./USB_LAYOUT.md) | GPT + ESP + AEGIS_ISOS scheme; manual loop-mount workflow; FAT32 vs ext4 trade-off |
+| **Operator** | [`HARDWARE_COMPAT.md`](./HARDWARE_COMPAT.md) | Community-curated table of validated machines; how to submit your own report |
 | **Operator** | [`compatibility/iso-matrix.md`](./compatibility/iso-matrix.md) | Per-distro kexec compatibility — what works, what surfaces a quirk |
 | **Developer** | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | One-page mental model — boot chain, crate dependencies, trust boundaries |
 | **Developer** | [`LOCAL_TESTING.md`](./LOCAL_TESTING.md) | 8-stage local CI equivalent; `qemu-loaded-stick.sh --attach` modes; iteration recipes |

@@ -160,6 +160,7 @@ aegis-boot doctor --help
 **Host checks:**
 - `operating system` — Linux today (macOS/Windows tracked in [#123](https://github.com/williamzujkowski/aegis-boot/issues/123))
 - `command: dd` / `sudo` / `sgdisk` / `lsblk` — the prerequisites for `flash` and stick inspection
+- `command: curl` / `sha256sum` / `gpg` — prerequisites for `aegis-boot fetch`
 - `Secure Boot (host)` — `mokutil --sb-state` first, falling back to reading `/sys/firmware/efi/efivars/SecureBoot-*` directly
 - `removable USB drives` — list / count
 
