@@ -194,6 +194,21 @@ pub fn run(args: &[String]) -> ExitCode {
         "lsblk",
         "lists removable drives for `flash` auto-detect",
     );
+    check_command_present(
+        &mut report,
+        "curl",
+        "downloads catalog ISOs (`aegis-boot fetch`) and the install one-liner",
+    );
+    check_command_present(
+        &mut report,
+        "sha256sum",
+        "verifies catalog ISO checksums (`aegis-boot fetch`)",
+    );
+    check_command_present(
+        &mut report,
+        "gpg",
+        "verifies catalog SHA256SUMS signatures (`aegis-boot fetch`)",
+    );
     check_secureboot_state(&mut report);
     check_removable_drives(&mut report);
     println!();
