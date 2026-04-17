@@ -30,6 +30,13 @@ class AegisBoot < Formula
   def install
     if OS.linux? && Hardware::CPU.intel?
       bin.install "aegis-boot-x86_64-linux" => "aegis-boot"
+      # GitHub release downloads come in without the exec bit; bin.install
+      # preserves the source mode. brew's final `test do` phase runs through
+      # a shell that sets 0755 implicitly, but the install-time
+      # generate_completions_from_executable invocation needs the bit set
+      # now. Mode 0555 matches what brew would land with post-install
+      # (read+exec for everyone, no write).
+      (bin/"aegis-boot").chmod 0555
 
       # Generate bash + zsh completions from the installed binary itself.
       # The runtime subcommand (`aegis-boot completions bash|zsh`) is the
