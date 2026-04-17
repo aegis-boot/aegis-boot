@@ -91,6 +91,11 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
             println!("  attestation:      {}", attestation_path.display());
             println!("  AEGIS_ISOS:       will be preserved byte-for-byte");
             println!();
+            // Phase 1.5 of #181: show the operator the host-side signed
+            // chain that a future `aegis-boot update` would install.
+            // No writes, no /tmp, no sudo — just reads host paths.
+            print_host_chain_preview();
+            println!();
             println!("NOTE: this is a read-only eligibility check (phase 1 of #181).");
             println!("The actual in-place update lands in a follow-up PR. No writes");
             println!("were made to {} during this command.", dev.display());
@@ -111,6 +116,139 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
             Err(1)
         }
     }
+}
+
+/// Resolve + print the host-side signed chain — the shim/grub/kernel/
+/// initrd files mkusb.sh would install if the operator re-ran the
+/// flash today. sha256 each so the operator has concrete bytes to
+/// compare against (phase 2 will add stick-side hashing + diff; for
+/// now this is a one-sided preview).
+///
+/// Failures to locate / hash a specific file are surfaced inline
+/// (not fatal) — the operator can still see which files are missing.
+/// This makes the "kernel not on PATH" case actionable: "shim: OK,
+/// grub: OK, kernel: MISSING at /boot/vmlinuz-*-virtual".
+fn print_host_chain_preview() {
+    println!("Host-side signed chain (what update would install):");
+    let chain = resolve_host_chain();
+    for entry in chain {
+        match entry.sha256 {
+            Ok(hash) => {
+                let short = &hash[..hash.len().min(16)];
+                println!(
+                    "  {:<8} {}  sha256:{}…",
+                    entry.role,
+                    entry.path.display(),
+                    short
+                );
+            }
+            Err(reason) => {
+                println!(
+                    "  {:<8} {}  (unavailable: {reason})",
+                    entry.role,
+                    entry.path.display()
+                );
+            }
+        }
+    }
+}
+
+/// One resolved signed-chain slot — mirrors the `SHIM_SRC` / `GRUB_SRC` /
+/// `KERNEL_SRC` / `INITRD_SRC` triple in `mkusb.sh`. `sha256` is the result
+/// of the hash attempt: `Err` carries a human-readable reason when the
+/// file couldn't be resolved or hashed.
+struct HostChainEntry {
+    role: &'static str,
+    path: PathBuf,
+    sha256: Result<String, String>,
+}
+
+/// Replicate `mkusb.sh`'s host-chain resolution in Rust. Looks at the
+/// defaults used by `mkusb.sh`:
+///   `SHIM_SRC=/usr/lib/shim/shimx64.efi.signed`
+///   `GRUB_SRC=/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed`
+///   `KERNEL_SRC`: first readable `/boot/vmlinuz-*-virtual` or `-generic`
+///   `INITRD_SRC`: `/boot/initrd.img-<same suffix as kernel>`
+///
+/// Env overrides aren't honored here — this is an *informational*
+/// preview against `mkusb.sh`'s defaults. An operator who overrides
+/// those env vars will know to re-do the math manually.
+fn resolve_host_chain() -> Vec<HostChainEntry> {
+    let mut out = Vec::with_capacity(4);
+    out.push(resolve_one(
+        "shim",
+        PathBuf::from("/usr/lib/shim/shimx64.efi.signed"),
+    ));
+    out.push(resolve_one(
+        "grub",
+        PathBuf::from("/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed"),
+    ));
+    let (kernel_path, kernel_ver) = find_kernel();
+    out.push(resolve_one("kernel", kernel_path.clone()));
+    let initrd_path = match kernel_ver {
+        Some(v) => PathBuf::from(format!("/boot/initrd.img-{v}")),
+        None => PathBuf::from("/boot/initrd.img-*"),
+    };
+    out.push(resolve_one("initrd", initrd_path));
+    out
+}
+
+/// Find the first readable `vmlinuz-*-{virtual,generic}` in /boot,
+/// matching mkusb.sh's iteration order. Returns the kernel path and
+/// its version suffix (stripped of the `vmlinuz-` prefix) so we can
+/// construct the matching initrd path.
+fn find_kernel() -> (PathBuf, Option<String>) {
+    for glob_suffix in ["-virtual", "-generic"] {
+        if let Ok(entries) = std::fs::read_dir("/boot") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                if name.starts_with("vmlinuz-") && name.ends_with(glob_suffix) {
+                    let ver = name.trim_start_matches("vmlinuz-").to_string();
+                    if std::fs::File::open(&path).is_ok() {
+                        return (path, Some(ver));
+                    }
+                }
+            }
+        }
+    }
+    (PathBuf::from("/boot/vmlinuz-*-{virtual,generic}"), None)
+}
+
+fn resolve_one(role: &'static str, path: PathBuf) -> HostChainEntry {
+    let sha256 = if path.is_file() {
+        sha256_file(&path)
+    } else {
+        Err("not found or not readable".to_string())
+    };
+    HostChainEntry { role, path, sha256 }
+}
+
+/// Shell out to `sha256sum` rather than pulling in the `sha2` crate —
+/// keeps the static-musl binary small and matches the doctor check
+/// that already verifies sha256sum is on PATH.
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let output = Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .map_err(|e| format!("sha256sum exec failed: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "sha256sum exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Output format: "<64 hex>  <path>\n"
+    stdout
+        .split_whitespace()
+        .next()
+        .filter(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| format!("sha256sum output malformed: {stdout:?}"))
 }
 
 fn print_help() {
