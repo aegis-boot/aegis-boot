@@ -490,13 +490,40 @@ impl IsoEnvironment for OsIsoEnvironment {
             }
         }
 
+        // Terminal dispatch. Attempt 1 may have reported status=success
+        // but left the mount_point empty (busybox loop-mode silently
+        // no-ops, or the filesystem type list didn't match the ISO's
+        // actual layout). In that case we previously returned
+        // Ok(empty mount_point) — callers then saw NoBootEntries
+        // instead of the real "mount didn't take" diagnostic. Re-verify
+        // the mount point has entries before accepting status.success.
+        let mount_point_populated = || {
+            std::fs::read_dir(&mount_point)
+                .ok()
+                .and_then(|mut entries| entries.next())
+                .is_some()
+        };
         match output {
-            Ok(out) if out.status.success() => {
+            Ok(out) if out.status.success() && mount_point_populated() => {
                 debug!("Mounted {} to {:?}", iso_path.display(), mount_point);
                 Ok(mount_point)
             }
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
+                // Explicit hint when mount claimed success but wrote
+                // nothing: typically a filesystem-type mismatch
+                // (Windows/macOS ISOs against older mount defaults).
+                let reason = if out.status.success() {
+                    format!(
+                        "mount claimed success but {} is empty — \
+                         filesystem type likely not auto-detected \
+                         (stderr: {})",
+                        mount_point.display(),
+                        stderr.trim()
+                    )
+                } else {
+                    stderr.to_string()
+                };
                 // Try fallback with fuseiso
                 let fuse_output = Command::new("fuseiso")
                     .arg(iso_path.to_string_lossy().as_ref())
@@ -504,14 +531,14 @@ impl IsoEnvironment for OsIsoEnvironment {
                     .output();
 
                 match fuse_output {
-                    Ok(fuse_out) if fuse_out.status.success() => {
+                    Ok(fuse_out) if fuse_out.status.success() && mount_point_populated() => {
                         debug!("Mounted {} via fuseiso", iso_path.display());
                         Ok(mount_point)
                     }
                     _ => {
-                        // Cleanup mount point on failure
+                        // Cleanup mount point on failure.
                         let _ = std::fs::remove_dir(&mount_point);
-                        Err(IsoError::MountFailed(stderr.to_string()))
+                        Err(IsoError::MountFailed(reason))
                     }
                 }
             }
