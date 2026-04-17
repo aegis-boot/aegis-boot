@@ -4,6 +4,33 @@ All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](
 
 ## [Unreleased]
 
+### Hardware coverage loop (epics [#137](https://github.com/williamzujkowski/aegis-boot/issues/137) + [#136](https://github.com/williamzujkowski/aegis-boot/issues/136))
+
+- **`aegis-boot compat` subcommand** ([#192](https://github.com/williamzujkowski/aegis-boot/pull/192)) — in-binary `COMPAT_DB` mirroring `docs/HARDWARE_COMPAT.md`; `aegis-boot compat [query]` fuzzy-matches vendor/model, `aegis-boot compat --json` emits a stable `schema_version=1` envelope. Seed data is verified-outcomes-only (no speculation) per the doc's policy.
+- **Dedicated `hardware-report.yml` issue template** ([#193](https://github.com/williamzujkowski/aegis-boot/pull/193)) — structured GitHub form whose fields map 1:1 to `COMPAT_DB` columns. Replaces the generic bug template that `aegis-boot compat` miss-path and `HARDWARE_COMPAT.md` used to point at.
+- **`doctor` machine identity row** ([#194](https://github.com/williamzujkowski/aegis-boot/pull/194)) — reads `/sys/class/dmi/id/*` (non-privileged) and prints the operator's vendor + model + firmware so filing a hardware report is copy-paste. Filters common OEM placeholders (`To Be Filled By O.E.M.`, etc.). Linux-only; verdict is Pass or Skip.
+- **`doctor` compat-DB cross-check** ([#195](https://github.com/williamzujkowski/aegis-boot/pull/195)) — after the identity row, `doctor` runs the DMI string through `find_entry(COMPAT_DB)` and emits a `compat DB coverage` row. Pass when documented, Warn when not (with the report URL inlined into the detail line).
+- **Guided MOK enrollment on errno 61** ([#202](https://github.com/williamzujkowski/aegis-boot/pull/202), closes the child in [#136](https://github.com/williamzujkowski/aegis-boot/issues/136)) — rescue-tui's `SignatureRejected` remedy is now three explicit steps (STEP 1/3 `sudo mokutil --import`, STEP 2/3 describing the blue-on-black "Perform MOK management" screen, STEP 3/3 with firmware boot-menu keys for the top 5 vendors). Replaces a single dense paragraph; no new screens required.
+
+### Scriptable surfaces
+
+- **Uniform `--json` across every read-mostly subcommand** ([#191](https://github.com/williamzujkowski/aegis-boot/pull/191)) — `update --json` emits an eligibility envelope + host-chain (sha256 per slot) or a reason-for-ineligible; `recommend --json [slug]` emits the full catalog or a single entry. Completes the sweep alongside prior `--json` additions to `doctor`, `list`, `attest list`, `attest show`, `verify`, `fetch --dry-run`. Every surface shares the `schema_version: 1` envelope and the `doctor::json_escape` helper.
+
+### Quality gates (epic [#138](https://github.com/williamzujkowski/aegis-boot/issues/138) — closed)
+
+- **`iso-parser` test-mock hazards closed** ([#196](https://github.com/williamzujkowski/aegis-boot/pull/196)) — `MockIsoEnvironment::mount_iso` / `unmount` no longer `.lock().unwrap()` (would cascade-fail every test after a panicked one); use `PoisonError::into_inner` for poison recovery. `MockIsoEnvironment::metadata` no longer returns `std::fs::metadata(std::env::temp_dir())` for any known path (silently validating size/mtime assertions against `/tmp`); fails closed with `ErrorKind::Unsupported`.
+- **`unwrap_used` / `expect_used` = deny on remaining three crates** ([#197](https://github.com/williamzujkowski/aegis-boot/pull/197)) — `aegis-fitness`, `iso-probe`, and `rescue-tui` had per-crate overrides at `warn` from before the workspace tightening landed. Audit found zero bare `.unwrap()`/`.expect(...)` in production code; tightening to `deny` is a pure safety-posture win. All crates now enforce the workspace default.
+
+### Infrastructure
+
+- **`qemu-usb-passthrough.sh` re-binds USB on exit** ([#198](https://github.com/williamzujkowski/aegis-boot/pull/198), closes [#121](https://github.com/williamzujkowski/aegis-boot/issues/121)) — after QEMU exits, `xhci_hcd` sometimes logs a reset but doesn't re-attach scsi drivers (lsusb shows the device; `/dev/sda` and `/sys/block/sda` gone until physical replug). Trap handler now resolves the device's sysfs ID before QEMU takes over, then writes it to `/sys/bus/usb/drivers/usb/{unbind,bind}` with a 300 ms settle after QEMU exits. `exec sudo` replaced with plain `sudo` so bash stays alive for the trap.
+
+### Documentation
+
+- **CLI.md coverage refresh** ([#199](https://github.com/williamzujkowski/aegis-boot/pull/199)) — added the missing `compat` / `update` / `verify` subcommand sections, documented `--json` across all seven supported commands in one table, refreshed the `doctor` example output to include the new machine-identity + compat DB rows.
+- **Theme names + accessibility recipes** ([#200](https://github.com/williamzujkowski/aegis-boot/pull/200)) — `README.md`'s `AEGIS_THEME` row now lists all five shipped themes (default/monochrome/high-contrast/okabe-ito/aegis); `TROUBLESHOOTING.md` gets a new "Accessibility" section pairing each symptom (low-contrast / color vision / serial / screen-reader) with the appropriate theme + `AEGIS_A11Y` flag. Closes the operator-discoverability half of the Okabe-Ito item in [#93](https://github.com/williamzujkowski/aegis-boot/issues/93) (code already shipped in [#76](https://github.com/williamzujkowski/aegis-boot/issues/76)).
+- **2026-04-17 content audit log** ([#201](https://github.com/williamzujkowski/aegis-boot/pull/201)) — recorded today's audit findings + PRs in `docs/content-audit.md` per the [#78](https://github.com/williamzujkowski/aegis-boot/issues/78) cadence.
+
 ### Bugs
 
 - **Script safety guards** ([#138](https://github.com/williamzujkowski/aegis-boot/issues/138) children) — two long-standing silent-failure paths in the build scripts now fail fast. `scripts/build-initramfs.sh` exits on `depmod` failure (was: logged a warning and continued, producing an image whose `modules.dep` still pointed at the original `.ko.zst` paths — storage modules would silently miss at boot). Set `AEGIS_ALLOW_MISSING_DEPMOD=1` to bypass. `scripts/mkusb.sh` now validates sgdisk-derived partition start sectors are non-empty, numeric, and non-zero before using them as `dd seek=` — an empty awk result yielded `seek=0`, silently overwriting the freshly-written GPT at sector 0.
