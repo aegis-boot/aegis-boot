@@ -169,12 +169,23 @@ pub const CATALOG: &[Entry] = &[
     },
 ];
 
-/// Entry point for `aegis-boot recommend [slug]`.
+/// Entry point for `aegis-boot recommend [slug] | [--slugs-only]`.
 pub fn run(args: &[String]) -> ExitCode {
     if args.first().map(String::as_str) == Some("--help")
         || args.first().map(String::as_str) == Some("-h")
     {
         print_help();
+        return ExitCode::SUCCESS;
+    }
+
+    // Machine-readable slug enumeration for shell completion scripts
+    // and other tooling. One slug per line on stdout; no table, no
+    // header. Keep this format stable — completion scripts depend on
+    // it line-for-line.
+    if args.first().map(String::as_str) == Some("--slugs-only") {
+        for entry in CATALOG {
+            println!("{}", entry.slug);
+        }
         return ExitCode::SUCCESS;
     }
 
@@ -196,8 +207,9 @@ fn print_help() {
     println!("aegis-boot recommend — curated ISO catalog");
     println!();
     println!("USAGE:");
-    println!("  aegis-boot recommend           List all catalog entries");
-    println!("  aegis-boot recommend <slug>    Show download + verify recipe");
+    println!("  aegis-boot recommend              List all catalog entries (human table)");
+    println!("  aegis-boot recommend <slug>       Show download + verify recipe");
+    println!("  aegis-boot recommend --slugs-only One slug per line (for shell completion)");
     println!();
     println!("EXAMPLES:");
     println!("  aegis-boot recommend");
@@ -344,6 +356,21 @@ mod tests {
         let pre = slugs.len();
         slugs.dedup();
         assert_eq!(pre, slugs.len(), "duplicate slug in CATALOG");
+    }
+
+    #[test]
+    fn slugs_only_flag_is_recognized() {
+        // Shell-completion scripts rely on --slugs-only emitting one
+        // slug per line with exit code 0 and nothing else on stdout.
+        // This test guards the argument-parsing contract; the actual
+        // printing is covered by running the binary in CI. (Completion)
+        let result = run(&["--slugs-only".to_string()]);
+        // ExitCode doesn't impl PartialEq; render via Debug to probe.
+        let rendered = format!("{result:?}");
+        assert!(
+            rendered.contains("(0)") || rendered == "ExitCode(unix_exit_status(0))",
+            "--slugs-only should exit 0, got {rendered}"
+        );
     }
 
     #[test]

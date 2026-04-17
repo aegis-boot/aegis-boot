@@ -1,0 +1,99 @@
+#compdef aegis-boot
+# Zsh completion for aegis-boot.
+#
+# Install (system-wide, needs root):
+#   sudo install -m 0644 completions/_aegis-boot \
+#     /usr/share/zsh/site-functions/_aegis-boot
+#
+# Install (per-user) — add completions/ to $fpath in your .zshrc:
+#   fpath=(/path/to/aegis-boot/completions $fpath)
+#   autoload -U compinit && compinit
+#
+# Dynamic slug list reads `aegis-boot recommend --slugs-only`, so the
+# completion stays in sync with the installed catalog.
+
+_aegis-boot() {
+    local -a subcommands
+    subcommands=(
+        'init:One-command rescue stick (flash + fetch + add profile)'
+        'flash:Write aegis-boot to a USB stick'
+        'list:Show ISOs on the stick with verification status'
+        'add:Copy + validate an ISO onto the stick'
+        'doctor:Health check (host + stick)'
+        'recommend:Curated catalog of known-good ISOs'
+        'fetch:Download + verify a catalog ISO'
+        'attest:Attestation receipts for past flashes'
+        'eject:Safely power-off a stick before removal'
+    )
+
+    local -a profiles
+    profiles=(panic-room minimal server)
+
+    _arguments -C \
+        '1: :->subcmd' \
+        '*:: :->args'
+
+    case "$state" in
+        subcmd)
+            _describe -t commands 'aegis-boot subcommand' subcommands
+            _values 'global flag' --help --version
+            ;;
+        args)
+            case "$line[1]" in
+                init)
+                    _arguments \
+                        '--profile[profile name]:profile:('"${profiles[*]}"')' \
+                        '--yes[skip interactive confirmations]' \
+                        '-y[skip interactive confirmations]' \
+                        '--no-doctor[skip doctor preflight]' \
+                        '--no-gpg[skip GPG verification]' \
+                        '--help[show help]' \
+                        '*:device:_files -g "/dev/sd*"'
+                    ;;
+                flash)
+                    _arguments \
+                        '--yes[skip typed-flash confirmation]' \
+                        '-y[skip typed-flash confirmation]' \
+                        '--help[show help]' \
+                        '*:device:_files -g "/dev/sd*"'
+                    ;;
+                add)
+                    _arguments \
+                        '--help[show help]' \
+                        '*:ISO file:_files -g "*.iso"'
+                    ;;
+                list|eject)
+                    _arguments \
+                        '--help[show help]' \
+                        '*:device:_files -g "/dev/sd*"'
+                    ;;
+                doctor)
+                    _arguments \
+                        '--stick[stick device]:device:_files -g "/dev/sd*"' \
+                        '--help[show help]'
+                    ;;
+                recommend|fetch)
+                    local -a slugs
+                    slugs=(${(f)"$(aegis-boot recommend --slugs-only 2>/dev/null)"})
+                    if [[ "$line[1]" == "fetch" ]]; then
+                        _arguments \
+                            '--out[destination directory]:dir:_directories' \
+                            '--no-gpg[skip GPG verification]' \
+                            '--help[show help]' \
+                            "*:ISO slug:($slugs)"
+                    else
+                        _arguments \
+                            '--slugs-only[machine-readable slug list]' \
+                            '--help[show help]' \
+                            "*:ISO slug:($slugs)"
+                    fi
+                    ;;
+                attest)
+                    _values 'attest action' list show --help
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_aegis-boot "$@"
