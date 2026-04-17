@@ -30,6 +30,22 @@ class AegisBoot < Formula
   def install
     if OS.linux? && Hardware::CPU.intel?
       bin.install "aegis-boot-x86_64-linux" => "aegis-boot"
+
+      # Generate bash + zsh completions from the installed binary itself.
+      # The runtime subcommand (`aegis-boot completions bash|zsh`) is the
+      # source of truth; keeps the formula honest across version bumps.
+      # `shells:` constrains to the two we support — `completions fish`
+      # would exit 2 otherwise and fail the install.
+      generate_completions_from_executable(
+        bin/"aegis-boot", "completions", shells: [:bash, :zsh]
+      )
+
+      # Emit the man page from the same binary (self-contained via
+      # include_str! in crates/aegis-cli/src/man.rs). Homebrew has no
+      # built-in `generate_man_from_executable`, so shell-out to the
+      # binary and install the result.
+      (buildpath/"aegis-boot.1").write(Utils.safe_popen_read(bin/"aegis-boot", "man"))
+      man1.install "aegis-boot.1"
     else
       odie <<~EOS
         aegis-boot binaries are currently published only for Linux x86_64.
@@ -83,5 +99,11 @@ class AegisBoot < Formula
     # status check so brew doesn't fail on the expected non-zero.)
     output = shell_output("#{bin}/aegis-boot flash 2>&1", 1)
     assert_match(/no removable USB drives detected|not detected as one/i, output)
+    # Completion files land where Homebrew expects them.
+    assert_path_exists bash_completion/"aegis-boot"
+    assert_path_exists zsh_completion/"_aegis-boot"
+    # Man page installed and contains the canonical .TH title macro.
+    assert_path_exists man1/"aegis-boot.1"
+    assert_match(/^\.TH AEGIS-BOOT 1/, (man1/"aegis-boot.1").read)
   end
 end
