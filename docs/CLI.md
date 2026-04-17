@@ -15,11 +15,31 @@ USAGE:
   aegis-boot fetch <slug>       Download + verify a catalog ISO
   aegis-boot attest [list|show] Attestation receipts for past flashes
   aegis-boot eject [device]     Safely power-off a stick before removal
+  aegis-boot update <device>    Check eligibility for in-place signed-chain update
+  aegis-boot verify [device]    Re-verify every ISO's sha256 against its sidecar
+  aegis-boot compat [query]     Hardware compatibility lookup (verified reports only)
   aegis-boot --version          Print version
   aegis-boot --help             This message
 ```
 
 All subcommands accept `--help` / `-h` for per-command usage.
+
+### `--json` mode (scripting)
+
+The read-mostly subcommands emit a stable machine-readable document when given `--json`:
+
+| Command             | What you get                                                                 |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `doctor --json`     | Health rows + score + band + `next_action`                                   |
+| `list --json`       | ISO inventory + per-file sha256 verdict + sidecar coverage                   |
+| `attest list --json`| All recorded attestation manifests + summary                                 |
+| `attest show --json`| Raw manifest verbatim (bit-for-bit reproduction of the on-disk file)         |
+| `verify --json`     | Per-ISO verification results (Verified / Mismatch / Unreadable / NotPresent) |
+| `recommend --json`  | Full catalog (or single entry with `recommend --json <slug>`)                |
+| `update --json`     | Eligibility envelope + host-chain (sha256 per slot) or reason-for-ineligible |
+| `compat --json`     | Compat DB entries (or single entry with `compat --json <query>`)             |
+
+Every `--json` output carries `schema_version: 1` at the root so downstream tooling can detect future breaking changes.
 
 The implementation lives in [`crates/aegis-cli`](../crates/aegis-cli) (binary name `aegis-boot`).
 
@@ -266,6 +286,7 @@ Diagnostic health check for both the host workstation and (optionally) an aegis-
 ```bash
 aegis-boot doctor                       # auto-detect a single removable drive
 aegis-boot doctor --stick /dev/sdc      # inspect a specific drive
+aegis-boot doctor --json                # schema_version=1 machine-readable output
 aegis-boot doctor --help
 ```
 
@@ -273,6 +294,8 @@ aegis-boot doctor --help
 
 **Host checks:**
 - `operating system` — Linux today (macOS/Windows tracked in [#123](https://github.com/williamzujkowski/aegis-boot/issues/123))
+- `machine identity` — vendor + model + firmware read from `/sys/class/dmi/id/*` (Linux only). Informational — gives operators filing a `hardware-report` the exact strings to paste.
+- `compat DB coverage` — cross-checks the DMI identity against the in-binary `COMPAT_DB`. Pass = documented, Warn = not yet in the DB with a link to the hardware-report template.
 - `command: dd` / `sudo` / `sgdisk` / `lsblk` — the prerequisites for `flash` and stick inspection
 - `command: curl` / `sha256sum` / `gpg` — prerequisites for `aegis-boot fetch`
 - `Secure Boot (host)` — `mokutil --sb-state` first, falling back to reading `/sys/firmware/efi/efivars/SecureBoot-*` directly
@@ -289,6 +312,8 @@ aegis-boot doctor — host + stick health check
 
 Host checks:
   [✓ PASS] operating system                  Linux (supported)
+  [✓ PASS] machine identity                  Framework Laptop (A6) — firmware: INSYDE Corp. 03.19 (09/18/2025)
+  [! WARN] compat DB coverage                not yet in compat DB — file a report at https://…/hardware-report.yml
   [✓ PASS] command: dd                       /usr/bin/dd (required to write the stick)
   [✓ PASS] command: sudo                     /usr/bin/sudo (required for dd / mount)
   [✓ PASS] command: sgdisk                   /usr/sbin/sgdisk (verifies stick partition table after flash)
@@ -522,6 +547,94 @@ Force-unmount of a busy partition (fuser / lsof-integrated) is deliberately out 
 
 ---
 
+## `aegis-boot update`
+
+Check whether a stick is eligible for a non-destructive in-place signed-chain update. Today this is an eligibility check only — the atomic file-replace step is tracked under [#181](https://github.com/williamzujkowski/aegis-boot/issues/181).
+
+### Usage
+
+```bash
+sudo aegis-boot update /dev/sdc        # human-readable report
+sudo aegis-boot update /dev/sdc --json # schema_version=1 machine-readable
+aegis-boot update --help
+```
+
+### What it reports
+
+- **Disk GUID + attestation-manifest match.** The stick is eligible only if its GPT disk GUID is the same one recorded in the last attestation manifest — this catches case of "operator picked the wrong device."
+- **Host-chain preview.** Resolves `SHIM_SRC` / `GRUB_SRC` / `KERNEL_SRC` / `INITRD_SRC` from the host (the same defaults `mkusb.sh` uses) and reports the sha256 of each slot. Operators see what *would* be replaced before opting in.
+- **Ineligibility reason.** When ineligible, names the specific mismatch (device missing / no attestation / GUID differs / …).
+
+### Exit codes
+
+- `0` — eligible; host-chain preview printed
+- `1` — ineligible; `--json` carries the exact reason
+- `2` — usage error
+
+---
+
+## `aegis-boot verify`
+
+Re-run sha256 verification on every ISO on the stick against its `.sha256` sidecar. Complements the TUI's per-ISO verdict column with a batch audit mode.
+
+### Usage
+
+```bash
+aegis-boot verify                      # auto-find mounted AEGIS_ISOS
+aegis-boot verify /dev/sdc             # mount partition 2, verify, unmount
+aegis-boot verify /mnt/aegis-isos      # use existing mount path
+aegis-boot verify --json               # schema_version=1 machine-readable
+aegis-boot verify --help
+```
+
+### Verdict states
+
+Each ISO resolves to exactly one verdict:
+
+- **Verified** — sha256 matches a sidecar's expected value (sidecar type recorded: `.sha256`, `SHA256SUMS`, or `SHA256SUMS.gpg`)
+- **Mismatch** — sha256 differs from sidecar; ISO is compromised or sidecar is stale
+- **Unreadable** — sidecar exists but couldn't be parsed / ISO can't be read; operator must check the filesystem
+- **NotPresent** — no sidecar at all; TUI shows GRAY verdict, operator must fetch a fresh copy
+
+### Exit codes
+
+- `0` — every ISO verified (including NotPresent-only)
+- `1` — one or more Mismatch or Unreadable verdicts — audit trail is broken
+
+---
+
+## `aegis-boot compat`
+
+Look up a machine in the in-binary hardware-compatibility database. Every row is a verified outcome filed against real hardware or the QEMU reference environment — no speculation.
+
+### Usage
+
+```bash
+aegis-boot compat                      # full table
+aegis-boot compat thinkpad             # fuzzy match vendor or model
+aegis-boot compat "q35 ovmf"           # whitespace-tokenized, all tokens must match
+aegis-boot compat --json               # schema_version=1 full catalog
+aegis-boot compat --json thinkpad      # schema_version=1 single entry
+aegis-boot compat --help
+```
+
+### Levels
+
+- **verified** (`✓`) — full `flash → boot → kexec` chain under enforcing Secure Boot with a signed distro
+- **partial** (`~`) — chain mostly works but one step has a caveat (reserved for future community reports)
+- **reference** (`≡`) — virtualized (QEMU + OVMF), the CI floor — not a physical-hardware claim
+
+### Feedback loop with `doctor`
+
+`aegis-boot doctor` reads DMI identity from `/sys/class/dmi/id/*` and cross-checks the in-binary DB automatically. If your machine is undocumented, `doctor` will emit a WARN row with a direct link to the [hardware-report issue template](../.github/ISSUE_TEMPLATE/hardware-report.yml).
+
+### Exit codes
+
+- `0` — match found or full table printed
+- `1` — no match for the given query (stderr prints the report-template URL)
+
+---
+
 ## Versioning
 
 `aegis-boot --version` reports the workspace version (currently `0.13.0`). The CLI ships in lockstep with the rest of the workspace; `cargo install --path crates/aegis-cli` (or downloading a release binary) will give you a CLI that matches the on-stick rescue-tui.
@@ -531,3 +644,4 @@ Force-unmount of a busy partition (fuser / lsof-integrated) is deliberately out 
 - [INSTALL.md](./INSTALL.md) — operator end-to-end walkthrough
 - [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) — common errors
 - [USB_LAYOUT.md](./USB_LAYOUT.md) — what the CLI is laying down on the stick
+- [HARDWARE_COMPAT.md](./HARDWARE_COMPAT.md) — curated community compat table (`aegis-boot compat` mirrors this)
