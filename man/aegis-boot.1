@@ -1,0 +1,229 @@
+.TH AEGIS-BOOT 1 "2026-04-17" "aegis-boot 0.13.0" "User Commands"
+.SH NAME
+aegis-boot \- signed-chain-preserving USB-boot-stick builder and operator CLI
+.SH SYNOPSIS
+.B aegis-boot
+.I subcommand
+.RI [ options ]
+.RI [ arguments ]
+.PP
+.B aegis-boot
+.BR \-\-version | \-\-help
+.RI [ \-\-json ]
+.SH DESCRIPTION
+.B aegis-boot
+builds USB sticks that boot under enforcing UEFI Secure Boot without disabling
+or bypassing it. The toolchain is: signed shim \[->] signed GRUB \[->] signed
+kernel \[->] initramfs \[->]
+.BR rescue-tui (1)
+\[->]
+.BR kexec_file_load (2)
+into an operator-selected ISO. Unlike other multi-ISO USB tools,
+.B aegis-boot
+never installs a "trust the whole stick" MOK, so the chain of trust the
+firmware vendor shipped with the machine is preserved end to end.
+.PP
+Every flash produces a signed JSON attestation manifest capturing the host
+workstation state, target device GUID, image SHA-256, and operator identity.
+.SH SUBCOMMANDS
+Each subcommand accepts
+.B \-\-help
+for full per-command usage. Read-mostly subcommands accept
+.BR \-\-json
+for stable machine-readable output (schema_version=1).
+.TP
+.B init \fR[\fIdevice\fR] [\-\-profile \fINAME\fR] [\-\-yes]
+One-command rescue stick. Composes
+.BR doctor ", " flash ", " fetch ", " add
+in sequence for every ISO in the named profile. Profiles:
+.BR panic-room " (default — Alpine + Ubuntu Server + Rocky 9, ~5 GiB),"
+.BR minimal " (Alpine only),"
+.BR server " (Ubuntu Server + Rocky + AlmaLinux, ~6 GiB)."
+.TP
+.B flash \fR[\fIdevice\fR] [\-\-yes]
+Write the signed boot image to a USB stick. Auto-detects a single removable
+drive if no device is given. Requires a typed
+.B flash
+confirmation unless
+.B \-\-yes
+is set.
+.TP
+.B list \fR[\fIdevice\fR] [\-\-json]
+Show ISOs on the stick with per-file SHA-256 verdict and attestation summary.
+.TP
+.B add \fIiso\fR [\fIdevice\fR]
+Copy and validate an ISO onto the stick. Preserves
+.BR .sha256 ", " SHA256SUMS ", and " minisig
+sidecars when found.
+.TP
+.B doctor \fR[\-\-stick \fIdevice\fR] [\-\-json]
+Health check the host workstation and (optionally) a stick. Prints a 0–100
+score, per-row verdicts, and a single
+.B NEXT ACTION
+line on any failure. On Linux also surfaces
+.B machine identity
+from
+.I /sys/class/dmi/id/*
+and cross-checks against the compat database.
+.TP
+.B recommend \fR[\fIslug\fR] [\-\-json] [\-\-slugs-only]
+Curated catalog of known-good ISOs with project-signed SHA256SUMS.
+.TP
+.B fetch \fIslug\fR \fR[\-\-out \fIdir\fR] [\-\-no-gpg] [\-\-dry-run]
+Download + GPG-verify an ISO from the catalog.
+.TP
+.B attest \fR{list|show} [\-\-json]
+List or inspect attestation receipts for past flashes.
+.TP
+.B eject \fR[\fIdevice\fR]
+Sync and power-off a stick before physical removal.
+.TP
+.B update \fIdevice\fR \fR[\-\-json]
+Check eligibility for a non-destructive signed-chain rotation. Exit 0 if
+eligible (prints host-chain preview), exit 1 otherwise (prints reason).
+.TP
+.B verify \fR[\fIdevice\fR] [\-\-json]
+Re-run SHA-256 verification on every ISO on the stick. Each ISO resolves to
+one of:
+.BR Verified ", " Mismatch ", " Unreadable ", or " NotPresent .
+.TP
+.B compat \fR[\fIquery\fR] [\-\-my-machine] [\-\-json]
+Look up a machine in the in-binary hardware compatibility database. Fuzzy
+matches vendor+model;
+.B \-\-my-machine
+auto-fills the query from DMI (Linux only).
+.TP
+.B completions \fR{bash|zsh}
+Emit a shell completion script to stdout. See
+.B INSTALLATION
+below.
+.SH INSTALLATION
+Install the binary via the cosign-verified one-liner:
+.PP
+.RS
+curl -sSL https://raw.githubusercontent.com/williamzujkowski/aegis-boot/main/scripts/install.sh | sh
+.RE
+.PP
+Or via Homebrew:
+.PP
+.RS
+brew tap williamzujkowski/aegis-boot https://github.com/williamzujkowski/aegis-boot
+.br
+brew install aegis-boot
+.RE
+.PP
+Install shell completions:
+.PP
+.RS
+aegis-boot completions bash | sudo tee /etc/bash_completion.d/aegis-boot
+.br
+aegis-boot completions zsh > ~/.zsh/completions/_aegis-boot
+.RE
+.SH ENVIRONMENT
+.TP
+.B AEGIS_ISO_ROOTS
+Colon-separated directory list
+.BR rescue-tui (1)
+scans for
+.B .iso
+files. Default:
+.I /run/media:/mnt
+.TP
+.B AEGIS_THEME
+Color theme for
+.BR rescue-tui (1):
+.BR default ", " monochrome ", " high-contrast ", " okabe-ito " (colorblind-safe), or " aegis " (brand)."
+Also settable via
+.I aegis.theme=NAME
+on the kernel command line.
+.TP
+.B AEGIS_A11Y
+When set to
+.B 1
+or when
+.B TERM=dumb
+is exported, skips the ratatui alt-screen and renders a numbered-menu
+text-mode interface. State transitions still emit
+.B ANN:
+lines to stderr for screen-reader consumption.
+.TP
+.B AEGIS_AUTO_KEXEC
+Substring match; the first matching ISO is kexec'd without operator
+confirmation. Intended for automated lab boot; not for production use.
+.TP
+.B AEGIS_LOG_JSON
+When set, switches
+.BR tracing (3rs)
+output to JSON for
+.I journalctl --output=json
+consumption.
+.TP
+.B AEGIS_BOOT_VERBOSE
+When set, captures
+.I /init
+output to
+.I /var/log/aegis-boot.log
+on the AEGIS_ISOS partition for post-reboot diagnostics.
+.SH FILES
+.TP
+.I AEGIS_ISOS
+FAT32 (or ext4) partition 2 on every aegis-boot stick; contains the ISOs
+plus their verification sidecars and per-flash attestation manifests.
+.TP
+.I /etc/bash_completion.d/aegis-boot
+System-wide bash completion. Generated by
+.BR "aegis-boot completions bash" .
+.TP
+.I $XDG_DATA_HOME/aegis-boot/attestations/
+Local attestation receipts (one JSON per flash), indexed by target device
+GUID and timestamp.
+.TP
+.I /sys/class/dmi/id/*
+Sysfs DMI fields read by
+.B doctor
+to surface machine identity and by
+.B "compat --my-machine"
+to auto-fill queries. Non-privileged read.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Subcommand-specific failure — see the subcommand's
+.B \-\-help
+for meaning.
+.BR doctor ", " update ", and " verify
+use 1 to signal "at least one FAIL check" /
+"stick is ineligible" / "mismatch or unreadable ISO present" respectively.
+.BR compat
+returns 1 on a DB miss (not an error — DB is incomplete by design).
+.TP
+.B 2
+Usage error (unknown subcommand, unknown flag, conflicting flags, missing
+required argument).
+.SH SEE ALSO
+.BR rescue-tui (1),
+.BR kexec_file_load (2),
+.BR mokutil (1),
+.BR sgdisk (8)
+.PP
+Full documentation at:
+.I https://github.com/williamzujkowski/aegis-boot/tree/main/docs
+.PP
+Compatibility reports:
+.I https://github.com/williamzujkowski/aegis-boot/blob/main/docs/HARDWARE_COMPAT.md
+.SH BUGS
+Report bugs via
+.I https://github.com/williamzujkowski/aegis-boot/issues
+using the bug or hardware-report template. Security-sensitive findings go
+through the private path documented in
+.IR SECURITY.md .
+.SH AUTHORS
+William Zujkowski and the aegis-boot contributors.
+.SH COPYRIGHT
+Dual-licensed MIT / Apache 2.0. See
+.I LICENSE-MIT
+and
+.I LICENSE-APACHE
+in the source tree.
