@@ -40,51 +40,17 @@ pub fn run(args: &[String]) -> ExitCode {
 /// Inner runner returning a typed result so `aegis-boot init` can branch
 /// on success/failure. Same semantics as `run`.
 pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
-    let mut out_dir: Option<PathBuf> = None;
-    let mut skip_gpg = false;
-    let mut slug: Option<String> = None;
-    let mut iter = args.iter();
-    while let Some(a) = iter.next() {
-        match a.as_str() {
-            "--help" | "-h" => {
-                print_help();
-                return Ok(());
-            }
-            "--out" => {
-                let Some(v) = iter.next() else {
-                    eprintln!("aegis-boot fetch: --out requires a directory argument");
-                    return Err(2);
-                };
-                out_dir = Some(PathBuf::from(v));
-            }
-            "--no-gpg" => {
-                skip_gpg = true;
-            }
-            arg if arg.starts_with("--out=") => {
-                out_dir = Some(PathBuf::from(arg.trim_start_matches("--out=")));
-            }
-            arg if arg.starts_with("--") => {
-                eprintln!("aegis-boot fetch: unknown option '{arg}'");
-                return Err(2);
-            }
-            other => {
-                if slug.is_some() {
-                    eprintln!(
-                        "aegis-boot fetch: only one slug allowed (got '{other}' after '{}')",
-                        slug.unwrap_or_else(|| "?".into())
-                    );
-                    return Err(2);
-                }
-                slug = Some(other.to_string());
-            }
-        }
-    }
-
-    let Some(slug) = slug else {
-        eprintln!("aegis-boot fetch: missing <slug> argument");
-        eprintln!("run 'aegis-boot recommend' to see available slugs");
-        return Err(2);
+    let parsed = match parse_flags(args) {
+        Ok(Some(p)) => p,
+        Ok(None) => return Ok(()), // --help printed, clean exit
+        Err(code) => return Err(code),
     };
+    let FetchFlags {
+        out_dir,
+        skip_gpg,
+        dry_run,
+        slug,
+    } = parsed;
 
     let Some(entry) = find_entry(&slug) else {
         eprintln!("aegis-boot fetch: no catalog entry matching '{slug}'");
@@ -93,6 +59,17 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
     };
 
     let dest = out_dir.unwrap_or_else(|| default_cache_dir(entry.slug));
+
+    // --dry-run prints the recipe (URLs, sizes-if-already-cached,
+    // destination, GPG policy) without any network or disk writes.
+    // Useful before committing to a download — especially when
+    // prepping a stick for an offline environment or before
+    // ejecting at a customer site.
+    if dry_run {
+        print_dry_run(entry, &dest, skip_gpg);
+        return Ok(());
+    }
+
     if let Err(e) = std::fs::create_dir_all(&dest) {
         eprintln!("aegis-boot fetch: cannot create {}: {e}", dest.display());
         return Err(1);
@@ -196,6 +173,73 @@ fn handle_gpg_step(dest: &Path, sums: &str, sig: &str, slug: &str) -> Option<u8>
     }
 }
 
+/// Parsed flag state for `aegis-boot fetch`. Splitting this into its
+/// own struct + `parse_flags` keeps `try_run` under the workspace-wide
+/// 100-line limit.
+struct FetchFlags {
+    out_dir: Option<PathBuf>,
+    skip_gpg: bool,
+    dry_run: bool,
+    slug: String,
+}
+
+/// Parse `fetch` CLI args. Returns:
+///   - `Ok(Some(FetchFlags))` on successful parse
+///   - `Ok(None)` when `--help` was printed (caller should clean-exit)
+///   - `Err(exit_code)` on usage error
+fn parse_flags(args: &[String]) -> Result<Option<FetchFlags>, u8> {
+    let mut out_dir: Option<PathBuf> = None;
+    let mut skip_gpg = false;
+    let mut dry_run = false;
+    let mut slug: Option<String> = None;
+    let mut iter = args.iter();
+    while let Some(a) = iter.next() {
+        match a.as_str() {
+            "--help" | "-h" => {
+                print_help();
+                return Ok(None);
+            }
+            "--out" => {
+                let Some(v) = iter.next() else {
+                    eprintln!("aegis-boot fetch: --out requires a directory argument");
+                    return Err(2);
+                };
+                out_dir = Some(PathBuf::from(v));
+            }
+            "--no-gpg" => skip_gpg = true,
+            "--dry-run" => dry_run = true,
+            arg if arg.starts_with("--out=") => {
+                out_dir = Some(PathBuf::from(arg.trim_start_matches("--out=")));
+            }
+            arg if arg.starts_with("--") => {
+                eprintln!("aegis-boot fetch: unknown option '{arg}'");
+                return Err(2);
+            }
+            other => {
+                if slug.is_some() {
+                    eprintln!(
+                        "aegis-boot fetch: only one slug allowed (got '{other}' after '{}')",
+                        slug.unwrap_or_else(|| "?".into())
+                    );
+                    return Err(2);
+                }
+                slug = Some(other.to_string());
+            }
+        }
+    }
+    let Some(slug) = slug else {
+        eprintln!("aegis-boot fetch: missing <slug> argument");
+        eprintln!("run 'aegis-boot recommend' to see available slugs");
+        return Err(2);
+    };
+    Ok(Some(FetchFlags {
+        out_dir,
+        skip_gpg,
+        dry_run,
+        slug,
+    }))
+}
+
 fn print_help() {
     println!("aegis-boot fetch — download + verify a catalog ISO");
     println!();
@@ -203,19 +247,78 @@ fn print_help() {
     println!("  aegis-boot fetch <slug>");
     println!("  aegis-boot fetch --out /path/to/dir <slug>");
     println!("  aegis-boot fetch --no-gpg <slug>      # SHA-256 only (NOT recommended)");
+    println!("  aegis-boot fetch --dry-run <slug>     # Preview — print recipe, no downloads");
     println!("  aegis-boot fetch --help");
     println!();
     println!("OPTIONS:");
     println!("  --out DIR     Destination directory (default: $XDG_CACHE_HOME/aegis-boot/<slug>)");
     println!("  --no-gpg      Skip GPG signature verification on SHA256SUMS");
+    println!("  --dry-run     Print what would be downloaded without doing it");
     println!("  --help        This message");
     println!();
     println!("EXAMPLES:");
     println!("  aegis-boot fetch ubuntu-24.04-live-server");
+    println!("  aegis-boot fetch --dry-run alpine-3.20-standard  # see URLs + sizes first");
     println!("  aegis-boot fetch --out ~/Downloads alpine-3.20-standard");
     println!();
     println!("`aegis-boot fetch` does not write to a USB stick; it downloads + verifies");
     println!("the ISO and prints the `aegis-boot add` command to copy it onto a stick.");
+}
+
+/// Preview what `aegis-boot fetch <slug>` would do. Prints the three
+/// URLs it would hit (ISO, SHA256SUMS, .sig), the destination dir,
+/// and the GPG policy. For already-cached files (previous fetch that
+/// didn't run `rm` on the cache dir), report the on-disk size so
+/// the operator knows the next real fetch will be a no-op for that
+/// file. No network, no writes. (#181-adjacent UX sharpening)
+fn print_dry_run(entry: &Entry, dest: &Path, skip_gpg: bool) {
+    let iso_filename = filename_from_url(entry.iso_url);
+    let sha_filename = filename_from_url(entry.sha256_url);
+    let sig_filename = filename_from_url(entry.sig_url);
+    println!("aegis-boot fetch — dry run (no network, no writes)");
+    println!();
+    println!("Would fetch:  {} ({})", entry.name, entry.slug);
+    println!("Destination:  {}", dest.display());
+    if dest.is_dir() {
+        println!("              (already exists)");
+    } else {
+        println!("              (would create)");
+    }
+    println!();
+    println!("Sources:");
+    report_source_url(entry.iso_url, &dest.join(&iso_filename), "ISO");
+    report_source_url(entry.sha256_url, &dest.join(&sha_filename), "SHA256SUMS");
+    report_source_url(entry.sig_url, &dest.join(&sig_filename), "signature");
+    println!();
+    println!("Verification:");
+    println!("  sha256sum -c against {sha_filename}");
+    if skip_gpg {
+        println!("  GPG: SKIPPED (--no-gpg)");
+    } else {
+        println!("  gpg --verify {sig_filename} {sha_filename}  (UnknownKey is non-fatal)");
+    }
+    if matches!(entry.sb, SbStatus::UnsignedNeedsMok) {
+        println!();
+        println!(
+            "Note: this ISO's kernel is unsigned. `aegis-boot fetch` will print a \
+             MOK-enrollment reminder on completion; see docs/UNSIGNED_KERNEL.md."
+        );
+    }
+    println!();
+    println!(
+        "Run `aegis-boot fetch {}` (without --dry-run) to proceed.",
+        entry.slug
+    );
+}
+
+/// One line of dry-run detail for a source URL: label, URL, and
+/// "(cached, N bytes)" when the target already exists on disk.
+fn report_source_url(url: &str, local_path: &Path, label: &str) {
+    let cached_note = match std::fs::metadata(local_path) {
+        Ok(m) if m.is_file() => format!(" (cached: {} bytes on disk)", m.len()),
+        _ => String::new(),
+    };
+    println!("  {label:<11}  {url}{cached_note}");
 }
 
 fn default_cache_dir(slug: &str) -> PathBuf {
