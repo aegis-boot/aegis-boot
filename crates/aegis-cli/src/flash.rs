@@ -151,13 +151,39 @@ fn select_drive(explicit: Option<&str>) -> Option<Drive> {
     io::stdout().flush().ok();
 
     let mut line = String::new();
-    if io::stdin().lock().read_line(&mut line).unwrap_or(0) == 0 {
-        return None;
+    match io::stdin().lock().read_line(&mut line) {
+        Ok(0) => {
+            // EOF before a newline — operator closed stdin (Ctrl-D) or a
+            // pipe writer dropped. Silently cancel is fine; no destructive
+            // action has happened yet. Keep the preceding prompt visible
+            // so the operator sees where the interaction stopped.
+            eprintln!("(no input; cancelled)");
+            return None;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            // Surface I/O errors explicitly. Previously `unwrap_or(0)`
+            // rendered EBADF / EIO indistinguishable from EOF, leaving
+            // the operator with no diagnostic. (#138)
+            eprintln!("stdin read error: {e}; cannot select drive.");
+            return None;
+        }
     }
     let input = line.trim();
 
     if drives.len() == 1 && (input.is_empty() || input.eq_ignore_ascii_case("y")) {
-        return Some(drives.into_iter().next().unwrap_or_else(|| unreachable!()));
+        // drives.len() == 1 was just checked; next() is guaranteed Some.
+        // Propagate as a structured error rather than `unreachable!()` so
+        // that a future refactor that breaks the invariant (e.g. an
+        // early-removed race in the drive list) fails loudly instead of
+        // panicking. (#138)
+        return drives.into_iter().next().or_else(|| {
+            eprintln!(
+                "internal: drive list became empty between len-check and consume; \
+                 rescan with 'aegis-boot flash' and report if reproducible."
+            );
+            None
+        });
     }
 
     let idx: usize = match input.parse::<usize>() {
@@ -167,12 +193,15 @@ fn select_drive(explicit: Option<&str>) -> Option<Drive> {
             return None;
         }
     };
-    Some(
-        drives
-            .into_iter()
-            .nth(idx)
-            .unwrap_or_else(|| unreachable!()),
-    )
+    drives.into_iter().nth(idx).or_else(|| {
+        // idx is bounds-checked above; propagate a structured error on
+        // the impossible path rather than `unreachable!()`. (#138)
+        eprintln!(
+            "internal: drive {idx} disappeared between bounds-check and consume; \
+             rescan with 'aegis-boot flash' and report if reproducible."
+        );
+        None
+    })
 }
 
 fn confirm_destructive(drive: &Drive) -> bool {
@@ -188,8 +217,19 @@ fn confirm_destructive(drive: &Drive) -> bool {
     io::stdout().flush().ok();
 
     let mut line = String::new();
-    if io::stdin().lock().read_line(&mut line).unwrap_or(0) == 0 {
-        return false;
+    match io::stdin().lock().read_line(&mut line) {
+        Ok(0) => {
+            // EOF before input — treat as "not confirmed". Destructive
+            // action declined silently by convention.
+            return false;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            // I/O error on stdin: fail safe (no flash). Previously
+            // swallowed as "no input" — operator saw nothing. (#138)
+            eprintln!("stdin read error during confirmation: {e}; cancelled.");
+            return false;
+        }
     }
     line.trim() == "flash"
 }
