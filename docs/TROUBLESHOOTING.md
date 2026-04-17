@@ -130,6 +130,34 @@ Probably not. The handoff banner ([#127](https://github.com/williamzujkowski/aeg
 
 ---
 
+## Accessibility
+
+### Colors are unreadable (low contrast / framebuffer / HDMI capture)
+
+Set `AEGIS_THEME=high-contrast` (kernel cmdline: `aegis.theme=high-contrast`). Uses the bright ANSI variants only.
+
+### Red/green verdicts are indistinguishable (color vision)
+
+Set `AEGIS_THEME=okabe-ito` (aliases `cb` / `colorblind`). Swaps the verdict trio to the Okabe-Ito colorblind-safe palette: bluish-green for success, orange for warning, vermillion for error. Distinguishable under deuteranopia and protanopia.
+
+### Serial console or screen reader strips color
+
+Set `AEGIS_THEME=monochrome` (aliases `mono` / `none`) so verdicts render as the default terminal foreground. Combine with `AEGIS_A11Y=text` (or `TERM=dumb`, which auto-enables it) to skip the ratatui alt-screen and get a numbered-menu text renderer.
+
+Every state transition also emits an `ANN: {human text}` line on stderr — a parallel stream readers can consume without parsing ratatui's draw buffer.
+
+### Available themes
+
+| Name            | Aliases                                     | Use case                                 |
+| --------------- | ------------------------------------------- | ---------------------------------------- |
+| `default`       | (unknown names fall back here)              | Standard VT100 16-color console          |
+| `monochrome`    | `mono`, `none`                              | Serial / screen-reader / unreliable ANSI |
+| `high-contrast` | `hc`, `high_contrast`                       | Low-contrast framebuffers, HDMI capture  |
+| `okabe-ito`     | `cb`, `colorblind`, `okabe_ito`, `okabeito` | Colorblind-safe verdict trio             |
+| `aegis`         | `brand`                                     | Project brand palette                    |
+
+---
+
 ## When in doubt
 
 Drop to the rescue shell from the List screen (navigate to the `[#] rescue shell` entry, press Enter). You're in a busybox shell with the full initramfs around you. Useful commands:
