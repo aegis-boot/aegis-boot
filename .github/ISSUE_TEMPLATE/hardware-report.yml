@@ -1,0 +1,145 @@
+name: Hardware report
+description: Report an aegis-boot outcome (success or failure) on a specific machine so we can grow the compat DB.
+title: "hardware: <vendor> <model> — <success|failure>"
+labels: ["hardware-report", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for growing the compat DB. Every row in `docs/HARDWARE_COMPAT.md` and the output of `aegis-boot compat` comes from a report like this one.
+
+        **Please only file a report for a machine you've personally booted (or failed to boot) under enforcing Secure Boot.** Speculation isn't useful here — one verified outcome is worth more than ten guesses.
+
+        **Security-sensitive findings (key handling, signature bypass, supply-chain) → DO NOT file here.** Use the private path in [SECURITY.md](../blob/main/SECURITY.md).
+
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Outcome
+      description: Did aegis-boot reach rescue-tui and kexec your selected ISO?
+      options:
+        - "Success — flashed, booted, kexec'd into a target ISO"
+        - "Partial — rescue-tui started but kexec failed on one or more ISOs"
+        - "Failure — stick did not boot on this machine"
+    validations:
+      required: true
+
+  - type: input
+    id: vendor
+    attributes:
+      label: Machine vendor
+      placeholder: "Lenovo / Dell / Framework / HP / ASUS / System76 / QEMU / …"
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Machine model + year
+      description: Include the generation or year if the vendor uses one. This is what we grep for in `aegis-boot compat`.
+      placeholder: "ThinkPad X1 Carbon Gen 11 (2023)"
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware vendor + version
+      description: |
+        On Linux: `sudo dmidecode -s bios-vendor` and `sudo dmidecode -s bios-version`.
+        From BIOS: look on the main/info page.
+      placeholder: "Lenovo / N3HET70W (1.50) / 2024-01-15"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sb-state
+    attributes:
+      label: Secure Boot state
+      description: Read via `mokutil --sb-state` from a Linux ISO booted on the machine, or from BIOS.
+      options:
+        - "enforcing (the target — full trust chain)"
+        - "audit"
+        - "setup"
+        - "disabled (please don't rely on these reports — they undermine the point)"
+    validations:
+      required: true
+
+  - type: input
+    id: boot-key
+    attributes:
+      label: Boot-menu key
+      description: Key to press during POST to get the firmware's boot-menu. Varies by vendor.
+      placeholder: "F12 / F11 / F10 / Esc / Del"
+    validations:
+      required: true
+
+  - type: input
+    id: aegis-version
+    attributes:
+      label: aegis-boot version
+      description: Output of `aegis-boot --version` on the workstation that wrote the stick.
+      placeholder: "v0.13.0"
+    validations:
+      required: true
+
+  - type: input
+    id: iso
+    attributes:
+      label: ISO you booted (vendor + version)
+      description: Exact ISO file you selected in rescue-tui. Include the distro's signing source if known.
+      placeholder: "ubuntu-24.04.2-live-server-amd64.iso (Canonical CA)"
+
+  - type: textarea
+    id: quirks
+    attributes:
+      label: Quirks / BIOS tweaks required
+      description: |
+        Anything another operator should know before trying this machine. Bullet per line.
+        Common entries: "Disable Fast Boot", "UEFI-only boot — no CSM", "Trusted Boot option must be on".
+      placeholder: |
+        - Disable Fast Boot in BIOS
+        - UEFI-only boot; CSM off
+        - Supervisor password must be set for SB config to stick
+
+  - type: textarea
+    id: failure-details
+    attributes:
+      label: Failure mode (if outcome is Partial / Failure)
+      description: |
+        Where exactly did it stop? Firmware-boot-menu / shim / grub / rescue-tui / kexec?
+        Include any visible error, errno, or dmesg tail.
+      render: shell
+      placeholder: |
+        rescue-tui starts, ISO selection works, but kexec_file_load fails with errno 13 (EACCES)
+        under enforcing SB on alpine-3.20-standard.iso — expected (unsigned kernel, MOK needed).
+
+  - type: dropdown
+    id: level
+    attributes:
+      label: Confidence level
+      description: |
+        This seeds the compat DB's `level` column.
+        **Verified** = you did a full flash → boot → kexec with a signed distro under enforcing SB.
+        **Partial** = chain mostly works but one step has a caveat.
+      options:
+        - "Verified — full chain, enforcing SB, signed distro"
+        - "Partial — some quirks, worth documenting"
+        - "Reference — virtualized (QEMU/VMware/etc.), not a physical-hardware claim"
+    validations:
+      required: true
+
+  - type: input
+    id: handle
+    attributes:
+      label: GitHub handle for attribution
+      description: |
+        How you'd like to be credited in `docs/HARDWARE_COMPAT.md` / `aegis-boot compat`.
+        Leave blank for "anonymous".
+      placeholder: "@yourhandle"
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else?
+      description: Optional. Related issues, links to dmesg gists, photos of the firmware screen.

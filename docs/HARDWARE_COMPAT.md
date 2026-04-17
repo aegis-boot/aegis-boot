@@ -62,7 +62,7 @@ For a failure:
 
 ### Where to submit
 
-Open a GitHub issue with the **`hardware-report`** label using the bug template at [`.github/ISSUE_TEMPLATE/bug.yml`](../.github/ISSUE_TEMPLATE/bug.yml) — the same fields apply. We'll periodically curate accepted reports into this document.
+Open a **[hardware report issue](https://github.com/williamzujkowski/aegis-boot/issues/new?template=hardware-report.yml)** using the dedicated [`.github/ISSUE_TEMPLATE/hardware-report.yml`](../.github/ISSUE_TEMPLATE/hardware-report.yml) form. The fields line up 1:1 with the `aegis-boot compat` DB, so curation into this document is mechanical.
 
 Alternatively, open a PR adding a row to the table directly. We'll accept PRs from any contributor who's actually booted aegis-boot on the machine in question.
 

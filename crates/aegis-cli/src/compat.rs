@@ -106,8 +106,7 @@ pub const COMPAT_DB: &[CompatEntry] = &[
 
 /// URL operators visit to file a hardware report. Kept here so the
 /// CLI and docs point at the same landing page.
-const REPORT_URL: &str =
-    "https://github.com/williamzujkowski/aegis-boot/issues/new?labels=hardware-report";
+const REPORT_URL: &str = "https://github.com/williamzujkowski/aegis-boot/issues/new?template=hardware-report.yml";
 
 pub fn run(args: &[String]) -> ExitCode {
     match try_run(args) {
