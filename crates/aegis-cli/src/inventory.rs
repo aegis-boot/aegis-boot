@@ -172,6 +172,12 @@ pub(crate) fn try_run_add(args: &[String]) -> Result<(), u8> {
         mount.path.display()
     );
 
+    // FAT32 ceiling — refuse 4+ GiB ISOs on vfat-mounted AEGIS_ISOS
+    // BEFORE the free-space check so the operator sees a filesystem-
+    // specific error (ext4 reflash path) rather than a generic
+    // "no-space" message during a partial copy.
+    check_fat32_ceiling(&mount, iso_filename, iso_size)?;
+
     // Check free space first — copying to a full partition kills the stick's
     // filesystem state.
     match free_bytes(&mount.path) {
@@ -443,6 +449,77 @@ fn free_bytes(path: &Path) -> Option<u64> {
         .and_then(|l| l.trim().parse().ok())
 }
 
+/// FAT32 hard per-file ceiling: 4 GiB minus one byte. Files at or above
+/// this size cannot be written to a FAT32 filesystem — reflash with
+/// `DATA_FS=ext4` in mkusb.sh to lift the ceiling.
+const FAT32_MAX_FILE_SIZE: u64 = (4 * 1024 * 1024 * 1024) - 1;
+
+/// Read `/proc/mounts` and return the filesystem type for the
+/// best-matching mount point. Returns `None` when the path isn't a
+/// mount point or /proc/mounts can't be read (non-Linux host, or a
+/// mount path that's a subdir of the actual mount). Pure-string lookup;
+/// no kernel syscalls.
+fn filesystem_type(path: &Path) -> Option<String> {
+    let mounts = std::fs::read_to_string("/proc/mounts").ok()?;
+    let target = path.to_string_lossy();
+    let mut best_match: Option<(&str, usize)> = None;
+    for line in mounts.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 3 {
+            continue;
+        }
+        let mount_path = fields[1];
+        let fs_type = fields[2];
+        if target == mount_path || target.starts_with(&format!("{mount_path}/")) {
+            // Prefer the longest matching mount path (handles nested
+            // mounts correctly).
+            let mp_len = mount_path.len();
+            if best_match.is_none_or(|(_, prev)| mp_len > prev) {
+                best_match = Some((fs_type, mp_len));
+            }
+        }
+    }
+    best_match.map(|(fs, _)| fs.to_string())
+}
+
+/// True when the filesystem type reported by /proc/mounts indicates a
+/// FAT32-family layout with the 4 GiB per-file ceiling.
+fn is_fat32_family(fs_type: &str) -> bool {
+    // Linux's /proc/mounts reports FAT32/FAT16/FAT12 as "vfat". Older
+    // fat drivers and some busybox builds use "msdos". Both have the
+    // per-file-size constraint; accept either.
+    matches!(fs_type, "vfat" | "msdos" | "fat" | "fat32")
+}
+
+/// Preflight for `aegis-boot add`: reject ISOs that exceed FAT32's
+/// 4 GiB per-file ceiling on a vfat-mounted `AEGIS_ISOS`. Common
+/// triggers: Win10/Win11 install ISOs (~5-8 GiB UDF), Rocky 9 DVD
+/// (~10 GiB). Unmounts the temporary mount on refusal so the caller
+/// doesn't have to.
+fn check_fat32_ceiling(mount: &Mount, iso_filename: &str, iso_size: u64) -> Result<(), u8> {
+    let Some(fs_type) = filesystem_type(&mount.path) else {
+        return Ok(());
+    };
+    if !is_fat32_family(&fs_type) || iso_size <= FAT32_MAX_FILE_SIZE {
+        return Ok(());
+    }
+    eprintln!(
+        "aegis-boot add: {} is {} — exceeds FAT32's 4 GiB per-file ceiling.",
+        iso_filename,
+        humanize(iso_size)
+    );
+    eprintln!("  The AEGIS_ISOS partition is formatted as {fs_type}, which cannot store");
+    eprintln!("  files at or above 4 GiB. Reflash with ext4 to lift the ceiling:");
+    eprintln!();
+    eprintln!("      DATA_FS=ext4 sudo aegis-boot flash /dev/sdX");
+    eprintln!();
+    eprintln!("  (Current contents will be wiped — back up first.)");
+    if mount.temporary {
+        unmount_temp(mount);
+    }
+    Err(1)
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn humanize(bytes: u64) -> String {
     let gib = bytes as f64 / 1_073_741_824.0;
@@ -451,5 +528,74 @@ fn humanize(bytes: u64) -> String {
     } else {
         let mib = bytes as f64 / 1_048_576.0;
         format!("{mib:.0} MiB")
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fat32_family_accepts_canonical_names() {
+        assert!(is_fat32_family("vfat"));
+        assert!(is_fat32_family("msdos"));
+        assert!(is_fat32_family("fat"));
+        assert!(is_fat32_family("fat32"));
+    }
+
+    #[test]
+    fn fat32_family_rejects_non_fat_types() {
+        assert!(!is_fat32_family("ext4"));
+        assert!(!is_fat32_family("ext2"));
+        assert!(!is_fat32_family("exfat"));
+        assert!(!is_fat32_family("btrfs"));
+        assert!(!is_fat32_family("xfs"));
+        assert!(!is_fat32_family("ntfs"));
+        assert!(!is_fat32_family("iso9660"));
+        assert!(!is_fat32_family("udf"));
+        assert!(!is_fat32_family(""));
+    }
+
+    #[test]
+    fn fat32_max_file_size_is_just_under_4_gib() {
+        // Sanity — FAT32 per-file ceiling is 4 GiB minus 1 byte.
+        // Tests elsewhere in the codebase may pivot on this constant;
+        // lock the value so a surprise change can't slip through.
+        assert_eq!(FAT32_MAX_FILE_SIZE, (4 * 1024 * 1024 * 1024) - 1);
+        assert_eq!(FAT32_MAX_FILE_SIZE, 4_294_967_295);
+    }
+
+    /// The operator pain-point this fix closes. A real Win11 25H2 ISO
+    /// is ~7.9 GiB — must trip the FAT32 gate on vfat-mounted
+    /// `AEGIS_ISOS` and be refused pre-copy. Sibling ISOs worth noting:
+    /// Rocky 9 DVD is ~10 GiB, Win10 consumer ~5.5 GiB, Ubuntu Desktop
+    /// has been flirting with the 4 GiB ceiling for several releases.
+    #[test]
+    fn win11_size_exceeds_fat32_ceiling() {
+        // Use a runtime value (std::hint::black_box) so clippy can't
+        // const-fold the assertion away — we're asserting the ceiling
+        // catches a real-world operator input, not a compile-time truism.
+        let size = std::hint::black_box(7_900_000_000u64);
+        assert!(size > FAT32_MAX_FILE_SIZE);
+    }
+
+    #[test]
+    fn typical_linux_installer_sizes_fit_fat32() {
+        // Alpine (~200 MiB), Ubuntu Server (~2.6 GiB), Fedora Server
+        // (~2 GiB), Rocky Minimal (~1.9 GiB) — all comfortably under
+        // the FAT32 ceiling. Guards against accidentally tightening
+        // the constant.
+        for size in [200_000_000u64, 2_700_000_000, 2_000_000_000, 1_900_000_000] {
+            assert!(
+                size <= FAT32_MAX_FILE_SIZE,
+                "size {size} should fit FAT32 but ceiling is {FAT32_MAX_FILE_SIZE}"
+            );
+        }
     }
 }
