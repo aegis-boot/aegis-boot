@@ -161,7 +161,7 @@ Full developer loop: [docs/LOCAL_TESTING.md](./docs/LOCAL_TESTING.md).
 | Variable | Default | Purpose |
 |---|---|---|
 | `AEGIS_ISO_ROOTS` | `/run/media:/mnt` | Colon-separated dirs to scan for `.iso` files |
-| `AEGIS_THEME` | (built-in) | Override theme name (e.g. `high-contrast`) |
+| `AEGIS_THEME` | default | Theme: `default`, `monochrome` (serial/screen-reader), `high-contrast` (low-contrast framebuffers), `okabe-ito` (colorblind-safe, aliases: `cb`, `colorblind`), or `aegis` (brand). Also readable as `aegis.theme=<name>` on kernel cmdline. |
 | `AEGIS_AUTO_KEXEC` | unset | Substring; first matching ISO is kexec'd without operator confirmation |
 | `AEGIS_A11Y` | unset | `1` enables text-only mode (also auto-enabled when `TERM=dumb`) |
 | `AEGIS_LOG_JSON` | unset | `1` switches `tracing` output to JSON for `journalctl --output=json` |
