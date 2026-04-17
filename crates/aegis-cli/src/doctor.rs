@@ -521,15 +521,14 @@ fn check_compat_db_coverage(report: &mut Report, vendor: &str, product: &str) {
         );
     } else {
         // Warn (not Fail): missing coverage is informational — aegis-boot
-        // still works on undocumented machines. We inline the guidance
-        // into `detail` because `next_action` only surfaces on Fail.
+        // still works on undocumented machines. Point at the one-command
+        // draft-report path (`compat --submit`) rather than the raw URL;
+        // the URL is long and operators running on a terminal can't
+        // click it, whereas they can copy-paste the subcommand.
         report.add(
             Verdict::Warn,
             "compat DB coverage",
-            format!(
-                "not yet in compat DB — file a report at {}",
-                crate::compat::REPORT_URL,
-            ),
+            "not yet in compat DB — run `aegis-boot compat --submit` to draft a report",
         );
     }
 }
