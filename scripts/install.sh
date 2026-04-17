@@ -276,6 +276,7 @@ main() {
     # --version was requested, pull completions from the same tag for
     # consistency; otherwise pull from main.
     install_completions "$version"
+    install_manpage "$version"
 
     note ""
     note "Try it:"
@@ -326,6 +327,35 @@ install_completions() {
         note "(zsh completion skipped; re-run as root, or fetch manually:"
         note "   curl -sSL $zsh_url -o ~/.zsh/completions/_aegis-boot"
         note "   and add ~/.zsh/completions to your fpath)"
+    fi
+}
+
+# Install the aegis-boot(1) man page. Same best-effort semantics as
+# completions — never fail the installer. Root gets /usr/local/share/man,
+# non-root gets the XDG-style fallback. If mandb is present, refresh
+# the cache so `man aegis-boot` works immediately.
+install_manpage() {
+    version_or_main="$1"
+    ref="${version_or_main:-main}"
+    if [ "$ref" = "latest" ] || [ -z "$ref" ]; then
+        ref=main
+    fi
+    man_url="https://raw.githubusercontent.com/$REPO/$ref/man/aegis-boot.1"
+
+    if [ "$(id -u)" -eq 0 ]; then
+        man_dest=/usr/local/share/man/man1/aegis-boot.1
+    else
+        man_dest="$HOME/.local/share/man/man1/aegis-boot.1"
+    fi
+    man_dir="$(dirname "$man_dest")"
+    if mkdir -p "$man_dir" 2>/dev/null \
+        && curl -fsSL --proto '=https' --tlsv1.2 -o "$man_dest" "$man_url" 2>/dev/null; then
+        note "man page:        $man_dest"
+        if command -v mandb >/dev/null 2>&1; then
+            mandb -q >/dev/null 2>&1 || true
+        fi
+    else
+        note "(man page not installed — download from $man_url)"
     fi
 }
 
