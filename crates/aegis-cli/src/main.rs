@@ -32,6 +32,7 @@ mod flash;
 mod init;
 mod inventory;
 mod man;
+mod mounts;
 mod update;
 mod verify;
 

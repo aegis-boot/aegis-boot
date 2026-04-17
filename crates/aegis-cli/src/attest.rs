@@ -208,8 +208,8 @@ fn locate_attestation_for_mount(
         return Err(format!("no attestation files in {}", dir.display()));
     }
 
-    if let Some(guid) = device_for_mount(mount_path)
-        .and_then(|p| disk_for_partition(&p))
+    if let Some(guid) = crate::mounts::device_for_mount(mount_path)
+        .and_then(|p| crate::mounts::parent_disk(&p))
         .and_then(|d| read_disk_guid(&d))
     {
         let lower = guid.to_lowercase();
@@ -237,76 +237,9 @@ fn locate_attestation_for_mount(
         .ok_or_else(|| "no attestation files found".to_string())
 }
 
-/// Read /proc/mounts and find the device backing the given mount path.
-/// Returns the longest-prefix-matching mount source (so /run/media/X
-/// resolves to /dev/sdc2 rather than the underlying / mount).
-fn device_for_mount(target: &Path) -> Option<PathBuf> {
-    let mounts = fs::read_to_string("/proc/mounts").ok()?;
-    let target_s = target
-        .canonicalize()
-        .ok()
-        .unwrap_or_else(|| target.to_path_buf());
-    let target_str = target_s.to_string_lossy();
-    let mut best: Option<(usize, PathBuf)> = None;
-    for line in mounts.lines() {
-        let f: Vec<&str> = line.split_whitespace().collect();
-        if f.len() < 2 {
-            continue;
-        }
-        let dev = f[0];
-        let mp = f[1];
-        if !dev.starts_with("/dev/") {
-            continue;
-        }
-        if target_str == mp || target_str.starts_with(&format!("{mp}/")) {
-            let len = mp.len();
-            if best.as_ref().is_none_or(|(b, _)| len > *b) {
-                best = Some((len, PathBuf::from(dev)));
-            }
-        }
-    }
-    best.map(|(_, dev)| dev)
-}
-
-/// Strip a partition suffix from a block device path so /dev/sdc2 →
-/// /dev/sdc, /dev/nvme0n1p3 → /dev/nvme0n1, /dev/mmcblk0p1 →
-/// /dev/mmcblk0. Returns None for paths that don't match a known
-/// pattern (we don't want to over-aggressively strip digits from
-/// something like /dev/loop12 — pass that through unchanged via None).
-fn disk_for_partition(part: &Path) -> Option<PathBuf> {
-    let name = part.file_name()?.to_str()?;
-    let stripped = if name.starts_with("sd") || name.starts_with("vd") || name.starts_with("hd") {
-        // /dev/sda1 → sda
-        name.trim_end_matches(|c: char| c.is_ascii_digit())
-    } else if name.starts_with("nvme") || name.starts_with("mmcblk") || name.starts_with("loop") {
-        // /dev/nvme0n1p3 → nvme0n1, /dev/mmcblk0p1 → mmcblk0,
-        // /dev/loop12p1 → loop12. The 'p' must be preceded by a digit
-        // (the disk number) — otherwise "loop12" would mis-strip as
-        // "loo" because the 'p' inside "loop" itself looks like a
-        // separator. Loop devices without partitions return None
-        // (caller passed a whole disk).
-        if let Some(idx) = name.rfind('p') {
-            let prev_is_digit = idx > 0 && name.as_bytes()[idx - 1].is_ascii_digit();
-            let suffix = &name[idx + 1..];
-            let suffix_all_digits =
-                !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit());
-            if prev_is_digit && suffix_all_digits {
-                &name[..idx]
-            } else {
-                return None;
-            }
-        } else {
-            return None;
-        }
-    } else {
-        return None;
-    };
-    if stripped == name {
-        // No partition suffix to strip — caller passed a whole disk.
-        return None;
-    }
-    Some(PathBuf::from(format!("/dev/{stripped}")))
-}
+// device_for_mount + disk_for_partition moved to `mounts.rs` (as
+// `mounts::device_for_mount` and `mounts::parent_disk`) so inventory.rs
+// can share the implementation. See mounts.rs for the canonical docs.
 
 /// Record a flash operation and return the path of the saved manifest.
 /// On any failure, returns Err — the caller (`flash::flash`) prints
@@ -913,51 +846,9 @@ mod tests {
         assert!(long.ends_with('\u{2026}'));
     }
 
-    #[test]
-    fn disk_for_partition_strips_sda_digit() {
-        assert_eq!(
-            disk_for_partition(&PathBuf::from("/dev/sda1")),
-            Some(PathBuf::from("/dev/sda"))
-        );
-        assert_eq!(
-            disk_for_partition(&PathBuf::from("/dev/sdc12")),
-            Some(PathBuf::from("/dev/sdc"))
-        );
-    }
-
-    #[test]
-    fn disk_for_partition_strips_nvme_p_suffix() {
-        assert_eq!(
-            disk_for_partition(&PathBuf::from("/dev/nvme0n1p3")),
-            Some(PathBuf::from("/dev/nvme0n1"))
-        );
-        assert_eq!(
-            disk_for_partition(&PathBuf::from("/dev/mmcblk0p1")),
-            Some(PathBuf::from("/dev/mmcblk0"))
-        );
-    }
-
-    #[test]
-    fn disk_for_partition_returns_none_for_whole_disk() {
-        // Whole disks don't have a partition suffix; we want Some(None)
-        // not "infinite recursion" or wrong stripping.
-        assert_eq!(disk_for_partition(&PathBuf::from("/dev/sda")), None);
-        assert_eq!(disk_for_partition(&PathBuf::from("/dev/nvme0n1")), None);
-    }
-
-    #[test]
-    fn disk_for_partition_does_not_overstrip_loop() {
-        // /dev/loop12 is a whole loop device; we shouldn't strip "12"
-        // off and yield "/dev/loop". The loop branch only matches when
-        // there's a 'p' separator, which loop devices never have.
-        assert_eq!(disk_for_partition(&PathBuf::from("/dev/loop12")), None);
-    }
-
-    #[test]
-    fn disk_for_partition_unknown_kind_returns_none() {
-        assert_eq!(disk_for_partition(&PathBuf::from("/dev/whatever3")), None);
-        assert_eq!(disk_for_partition(&PathBuf::from("not/a/dev/path")), None);
-    }
+    // disk_for_partition tests moved to mounts.rs (the canonical
+    // home); kept the smoke-test for the attest-specific call path
+    // via the summary_for_mount → device_for_mount → parent_disk chain.
 
     #[test]
     fn iso_record_appends_to_isos_vec() {
