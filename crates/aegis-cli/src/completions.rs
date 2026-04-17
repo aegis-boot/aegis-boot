@@ -40,6 +40,7 @@ const SUBCOMMANDS: &[&str] = &[
     "verify",
     "compat",
     "completions",
+    "man",
     "version",
     "help",
 ];

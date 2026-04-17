@@ -17,7 +17,7 @@ _aegis_boot() {
     local cur prev words cword
     _init_completion || return
 
-    local subcommands="init flash list add doctor recommend fetch attest eject update verify compat completions --help --version"
+    local subcommands="init flash list add doctor recommend fetch attest eject update verify compat completions man --help --version"
     local attest_actions="list show"
 
     # Top-level subcommand or global flag.
@@ -108,6 +108,11 @@ _aegis_boot() {
             ;;
         completions)
             COMPREPLY=($(compgen -W "bash zsh --help" -- "$cur"))
+            return 0
+            ;;
+        man)
+            # `man` takes no positional args; only --help.
+            COMPREPLY=($(compgen -W "--help" -- "$cur"))
             return 0
             ;;
     esac
