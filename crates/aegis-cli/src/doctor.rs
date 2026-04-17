@@ -301,6 +301,7 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
         println!("Host checks:");
     }
     check_os(&mut report);
+    check_machine_identity(&mut report);
     check_command_present(&mut report, "dd", "required to write the stick");
     check_command_present(&mut report, "sudo", "required for dd / mount");
     check_command_present(
@@ -433,6 +434,120 @@ fn check_os(report: &mut Report) {
             "operating system",
             "unrecognized target_os; aegis-boot may not function correctly",
         );
+    }
+}
+
+/// Surface machine identity from `/sys/class/dmi/id/` on Linux. This is
+/// purely informational (verdict `Pass` / `Skip`), never a failure — the
+/// point is to give operators filing a `hardware-report` the exact
+/// strings to paste, and to let them cross-check their output against
+/// `aegis-boot compat`.
+///
+/// Fields read (all non-privileged): `sys_vendor`, `product_name`,
+/// `product_version`, `bios_vendor`, `bios_version`, `bios_date`.
+/// Lenovo puts the human-readable model string in `product_version`;
+/// other OEMs usually put it in `product_name`. We prefer the longer
+/// non-placeholder value so the row looks like a human would write it.
+fn check_machine_identity(report: &mut Report) {
+    #[cfg(target_os = "linux")]
+    {
+        let sys_vendor = read_dmi_field("sys_vendor");
+        let product = dmi_product_label();
+        let bios = dmi_bios_label();
+
+        match (&sys_vendor, &product) {
+            (Some(v), Some(p)) => {
+                let detail = match bios {
+                    Some(b) => format!("{v} {p} — firmware: {b}"),
+                    None => format!("{v} {p}"),
+                };
+                report.add(Verdict::Pass, "machine identity", detail);
+            }
+            _ => {
+                report.add(
+                    Verdict::Skip,
+                    "machine identity",
+                    "DMI fields unavailable (placeholder values or /sys/class/dmi/id not present)",
+                );
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        report.add(
+            Verdict::Skip,
+            "machine identity",
+            "DMI lookup is Linux-only (non-Linux hosts skip this check)",
+        );
+    }
+}
+
+/// Vendor placeholder strings many consumer OEMs ship verbatim. These
+/// are the strings we filter out as "not actually set" when reading DMI.
+#[cfg(target_os = "linux")]
+const DMI_PLACEHOLDERS: &[&str] = &[
+    "to be filled by o.e.m.",
+    "system manufacturer",
+    "system product name",
+    "system version",
+    "default string",
+    "not applicable",
+    "not specified",
+    "oem",
+    "o.e.m.",
+    "none",
+];
+
+/// Read a DMI field from sysfs, trim whitespace, and filter vendor
+/// placeholder strings. Returns `None` for missing, empty, or placeholder
+/// values.
+#[cfg(target_os = "linux")]
+fn read_dmi_field(field: &str) -> Option<String> {
+    let path = format!("/sys/class/dmi/id/{field}");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if DMI_PLACEHOLDERS.iter().any(|p| lower == *p) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// Compose the "product" half of the identity string. Lenovo puts the
+/// human-readable model in `product_version` and a SKU in `product_name`;
+/// Dell/HP/QEMU put the friendly name in `product_name`. Prefer
+/// `product_version` when it differs meaningfully from `product_name`.
+#[cfg(target_os = "linux")]
+fn dmi_product_label() -> Option<String> {
+    let name = read_dmi_field("product_name");
+    let version = read_dmi_field("product_version");
+    match (name, version) {
+        (Some(n), Some(v)) if v.eq_ignore_ascii_case(&n) => Some(n),
+        (Some(n), Some(v)) if v.len() > n.len() => Some(format!("{v} ({n})")),
+        (Some(n), Some(v)) => Some(format!("{n} / {v}")),
+        (Some(n), None) => Some(n),
+        (None, Some(v)) => Some(v),
+        (None, None) => None,
+    }
+}
+
+/// Compose the BIOS half: "vendor version (date)" with graceful degradation
+/// when any field is missing.
+#[cfg(target_os = "linux")]
+fn dmi_bios_label() -> Option<String> {
+    let vendor = read_dmi_field("bios_vendor");
+    let version = read_dmi_field("bios_version");
+    let date = read_dmi_field("bios_date");
+    match (vendor, version, date) {
+        (Some(ve), Some(vi), Some(d)) => Some(format!("{ve} {vi} ({d})")),
+        (Some(ve), Some(vi), None) => Some(format!("{ve} {vi}")),
+        (None, Some(vi), Some(d)) => Some(format!("{vi} ({d})")),
+        (None, Some(vi), None) => Some(vi),
+        (Some(ve), None, _) => Some(ve),
+        (None, None, _) => None,
     }
 }
 
@@ -831,5 +946,32 @@ mod tests {
     fn report_without_json_mode_defaults_to_false() {
         let r = Report::new();
         assert!(!r.json_mode);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn check_machine_identity_adds_row_and_does_not_panic() {
+        // The check must always add exactly one row and never panic,
+        // regardless of whether DMI data is available (CI runners often
+        // expose QEMU/KVM identity; developer workstations expose real
+        // hardware). Verdict is Pass or Skip, never Fail/Warn.
+        let mut r = Report::new();
+        check_machine_identity(&mut r);
+        assert_eq!(r.rows.len(), 1);
+        let (verdict, name, _) = &r.rows[0];
+        assert_eq!(name, "machine identity");
+        assert!(
+            matches!(verdict, Verdict::Pass | Verdict::Skip),
+            "machine identity should never Fail or Warn, got {verdict:?}"
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn check_machine_identity_skips_on_non_linux() {
+        let mut r = Report::new();
+        check_machine_identity(&mut r);
+        assert_eq!(r.rows.len(), 1);
+        assert!(matches!(r.rows[0].0, Verdict::Skip));
     }
 }
