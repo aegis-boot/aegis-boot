@@ -1608,7 +1608,9 @@ ID=ubuntu
         // Now verify the mock still functions — mount + unmount should
         // succeed without panicking via lock recovery.
         let iso = std::path::Path::new("/isos/test.iso");
-        let mount = env.mount_iso(iso).expect("mount_iso must recover from poison");
+        let mount = env
+            .mount_iso(iso)
+            .expect("mount_iso must recover from poison");
         env.unmount(&mount)
             .expect("unmount must recover from poison");
     }
