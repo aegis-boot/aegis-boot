@@ -234,6 +234,29 @@ sgdisk \
 # them from the partition table we just wrote.
 ESP_START=$(sgdisk -i 1 "$IMG" | awk '/First sector:/ {print $3}')
 DATA_START=$(sgdisk -i 2 "$IMG" | awk '/First sector:/ {print $3}')
+
+# Validate offsets are non-empty numeric and non-zero before handing
+# them to `dd seek=` — an empty awk result yields `seek=` which bash
+# collapses to `seek=0`, silently overwriting the freshly-written GPT
+# at sector 0. A 0 value means sgdisk reported partition 1 starting at
+# sector 0, which is also wrong (GPT header occupies sector 0). (#138)
+for pair in "ESP:$ESP_START" "DATA:$DATA_START"; do
+    name="${pair%%:*}"
+    value="${pair#*:}"
+    case "$value" in
+        ''|*[!0-9]*)
+            log "FATAL: sgdisk returned non-numeric start sector for $name: '$value'"
+            log "  partition table parse failed; refusing to dd onto sector 0 and corrupt GPT."
+            exit 1
+            ;;
+    esac
+    if [ "$value" -eq 0 ] 2>/dev/null; then
+        log "FATAL: sgdisk returned sector 0 as start for $name partition"
+        log "  that overlaps the GPT header at sector 0; refusing to proceed."
+        exit 1
+    fi
+done
+
 log "  ESP  @ sector $ESP_START"
 log "  data @ sector $DATA_START"
 
