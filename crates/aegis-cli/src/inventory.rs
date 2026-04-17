@@ -196,19 +196,23 @@ fn print_attestation_summary(mount_path: &Path) {
     println!();
 }
 
-struct Mount {
-    path: PathBuf,
+/// A resolved mount point — either an existing directory or one we
+/// created ourselves. Promoted to `pub(crate)` so other subcommands
+/// (currently `verify`) can reuse the mount-resolution logic without
+/// duplicating it.
+pub(crate) struct Mount {
+    pub(crate) path: PathBuf,
     /// If true, we mounted the partition ourselves and should unmount on exit.
-    temporary: bool,
+    pub(crate) temporary: bool,
     #[allow(dead_code)]
-    device: Option<PathBuf>,
+    pub(crate) device: Option<PathBuf>,
 }
 
 /// Resolve the target mount from either:
 ///   - no arg: find an already-mounted `AEGIS_ISOS` partition, or auto-mount `/dev/sdX2`
 ///   - `/dev/sdX`: find partition 2, mount it (temp dir), return that
 ///   - `/some/path`: use as-is (assume already mounted)
-fn resolve_mount(arg: Option<&str>) -> Result<Mount, String> {
+pub(crate) fn resolve_mount(arg: Option<&str>) -> Result<Mount, String> {
     if let Some(raw) = arg {
         let p = PathBuf::from(raw);
         if p.is_dir() {
@@ -281,7 +285,7 @@ fn mount_dev(dev: &Path) -> Result<Mount, String> {
     })
 }
 
-fn unmount_temp(m: &Mount) {
+pub(crate) fn unmount_temp(m: &Mount) {
     let _ = Command::new("sudo")
         .args(["umount", &m.path.display().to_string()])
         .status();

@@ -6,8 +6,10 @@ version = 4
 name = "aegis-cli"
 version = "0.13.0"
 dependencies = [
+ "iso-probe",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
