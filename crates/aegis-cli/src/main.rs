@@ -31,6 +31,7 @@ mod fetch;
 mod flash;
 mod init;
 mod inventory;
+mod man;
 mod update;
 mod verify;
 
@@ -59,6 +60,7 @@ fn main() -> ExitCode {
         Some("verify") => verify::run(&args[1..]),
         Some("compat") => compat::run(&args[1..]),
         Some("completions") => completions::run(&args[1..]),
+        Some("man") => man::run(&args[1..]),
         Some("-h" | "--help" | "help") | None => {
             print_help();
             ExitCode::SUCCESS
@@ -103,6 +105,7 @@ fn print_help() {
     println!("  aegis-boot verify [device]    Re-verify every ISO's sha256 against its sidecar");
     println!("  aegis-boot compat [query]     Hardware compatibility lookup");
     println!("  aegis-boot completions <shell> Emit bash/zsh completion script");
+    println!("  aegis-boot man                 Emit the aegis-boot(1) man page to stdout");
     println!("  aegis-boot --version [--json] Print version (--json emits schema_version=1)");
     println!("  aegis-boot --help             This message");
     println!();

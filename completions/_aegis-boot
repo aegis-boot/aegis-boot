@@ -28,6 +28,7 @@ _aegis-boot() {
         'verify:Re-verify every ISO on the stick against its sidecar'
         'compat:Hardware compatibility lookup (verified reports only)'
         'completions:Emit bash/zsh completion script'
+        'man:Emit the aegis-boot(1) man page to stdout'
     )
 
     _arguments -C \
@@ -123,6 +124,9 @@ _aegis-boot() {
                     ;;
                 completions)
                     _values 'shell' bash zsh --help
+                    ;;
+                man)
+                    _arguments '--help[show help]'
                     ;;
             esac
             ;;
