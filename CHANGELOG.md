@@ -6,6 +6,7 @@ All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](
 
 ### Bugs
 
+- **Script safety guards** ([#138](https://github.com/williamzujkowski/aegis-boot/issues/138) children) — two long-standing silent-failure paths in the build scripts now fail fast. `scripts/build-initramfs.sh` exits on `depmod` failure (was: logged a warning and continued, producing an image whose `modules.dep` still pointed at the original `.ko.zst` paths — storage modules would silently miss at boot). Set `AEGIS_ALLOW_MISSING_DEPMOD=1` to bypass. `scripts/mkusb.sh` now validates sgdisk-derived partition start sectors are non-empty, numeric, and non-zero before using them as `dd seek=` — an empty awk result yielded `seek=0`, silently overwriting the freshly-written GPT at sector 0.
 - **OVMF SB detection fallback** ([#118](https://github.com/williamzujkowski/aegis-boot/issues/118)) — `rescue-tui`'s `SecureBootStatus::detect()` now scans `/sys/firmware/efi/efivars` for any filename starting with `SecureBoot-` when the two upstream-spec paths (global-GUID and plain) miss. Handles OVMF firmware builds that publish the variable under a non-spec suffix — observed under QEMU+OVMF SecBoot shakedown where rescue-tui's header showed `SB:unknown` despite SB enforcing. Parallels the existing scan fallback in `aegis-cli doctor` (doctor.rs:371).
 
 ### Publishing prep

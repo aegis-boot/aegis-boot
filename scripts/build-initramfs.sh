@@ -283,11 +283,29 @@ if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
     # Regenerate modules.dep so it references our decompressed .ko paths
     # (source kernel's modules.dep points at .ko.zst). depmod -b rebuilds
     # into the staged tree; no runtime kernel match needed.
+    #
+    # Fail hard on depmod failure (#138): a silent warning here was
+    # producing silent boot-time failures (storage modules missing at
+    # the busybox modprobe call in /init because modules.dep still
+    # points at the original .ko.zst paths). If depmod is genuinely
+    # missing on the build host, the operator should know before
+    # producing an image they'll then have to debug under OVMF. Set
+    # AEGIS_ALLOW_MISSING_DEPMOD=1 to bypass.
     if command -v depmod >/dev/null 2>&1; then
-        depmod -b "$STAGE_DIR" "$KVER" 2>/dev/null || \
-            log "WARNING: depmod failed; busybox modprobe may miss deps"
+        depmod_stderr=$(depmod -b "$STAGE_DIR" "$KVER" 2>&1 >/dev/null) || {
+            log "FATAL: depmod -b '$STAGE_DIR' '$KVER' failed"
+            log "  stderr: $depmod_stderr"
+            log "  busybox modprobe would miss dependencies at boot time; aborting."
+            log "  (set AEGIS_ALLOW_MISSING_DEPMOD=1 to bypass — not recommended)"
+            [ -n "${AEGIS_ALLOW_MISSING_DEPMOD:-}" ] || exit 1
+            log "WARNING: proceeding despite depmod failure — AEGIS_ALLOW_MISSING_DEPMOD set."
+        }
     else
-        log "WARNING: depmod not on PATH; modules will load only with explicit paths"
+        log "FATAL: depmod not on PATH; cannot regenerate modules.dep for staged modules."
+        log "  install kmod (e.g. 'apt-get install kmod' / 'dnf install kmod') and retry."
+        log "  (set AEGIS_ALLOW_MISSING_DEPMOD=1 to bypass — not recommended)"
+        [ -n "${AEGIS_ALLOW_MISSING_DEPMOD:-}" ] || exit 1
+        log "WARNING: proceeding without depmod — AEGIS_ALLOW_MISSING_DEPMOD set."
     fi
 else
     log "WARNING: no kernel modules source found; iso9660 mounts will fail"
