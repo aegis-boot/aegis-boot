@@ -1,39 +1,12 @@
-//! Removable drive detection via sysfs.
+//! Linux removable-drive detection via sysfs.
 //!
 //! Enumerates `/sys/block/sd*` looking for removable USB mass storage
-//! devices. Filters out system drives, `NVMe`, loop devices, and
-//! anything that isn't flagged as removable by the kernel.
+//! devices. Filters out system drives, `NVMe`, loop devices, and anything
+//! not flagged as removable by the kernel.
 
+use super::Drive;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// A detected removable USB drive.
-#[derive(Debug, Clone)]
-pub struct Drive {
-    /// Block device path (e.g. `/dev/sdc`).
-    pub dev: PathBuf,
-    /// Human-readable model string from sysfs.
-    pub model: String,
-    /// Capacity in bytes.
-    pub size_bytes: u64,
-    /// Number of existing partitions.
-    pub partitions: usize,
-}
-
-impl Drive {
-    /// Human-readable capacity.
-    #[must_use]
-    #[allow(clippy::cast_precision_loss)]
-    pub fn size_human(&self) -> String {
-        let gb = self.size_bytes as f64 / 1_073_741_824.0;
-        if gb >= 1.0 {
-            format!("{gb:.1} GB")
-        } else {
-            let mb = self.size_bytes as f64 / 1_048_576.0;
-            format!("{mb:.0} MB")
-        }
-    }
-}
 
 /// Scan sysfs for removable USB block devices suitable for flashing.
 /// Returns them sorted by device name.
