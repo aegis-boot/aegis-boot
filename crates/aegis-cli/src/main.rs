@@ -34,7 +34,9 @@ mod init;
 mod inventory;
 mod man;
 mod mounts;
+mod plan;
 mod update;
+mod userfacing;
 mod verify;
 
 use std::env;
