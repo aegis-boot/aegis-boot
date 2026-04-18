@@ -23,7 +23,7 @@ jobs:
       matrix:
         target: [validate_path, distribution_from_paths]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install nightly toolchain
         run: |
           rustup toolchain install nightly --profile minimal
@@ -40,7 +40,7 @@ jobs:
         run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=$DURATION
       - name: Upload crashes on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fuzz-crashes-${{ matrix.target }}
           path: |
