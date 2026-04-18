@@ -26,7 +26,7 @@ jobs:
       run:
         working-directory: crates/iso-parser
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }} --profile minimal --component rustfmt,clippy
@@ -42,7 +42,7 @@ jobs:
     name: aegis-cli (Linux + macOS + Windows cross-check)
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Rust
         run: |
           rustup toolchain install 1.85.0 --profile minimal --component rustfmt,clippy
@@ -70,7 +70,7 @@ jobs:
     name: aegis-fitness audit
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Rust
         run: rustup toolchain install 1.85.0 --profile minimal && rustup override set 1.85.0
       - uses: Swatinem/rust-cache@v2
@@ -87,7 +87,7 @@ jobs:
     name: cargo-deny (advisories + licenses + bans)
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           manifest-path: crates/iso-parser/Cargo.toml
@@ -97,7 +97,7 @@ jobs:
     name: Generate CycloneDX SBOM
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Rust
         run: rustup toolchain install 1.85.0 --profile minimal && rustup override set 1.85.0
       - name: Install cargo-cyclonedx
@@ -106,7 +106,7 @@ jobs:
         working-directory: crates/iso-parser
         run: cargo cyclonedx --format json
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sbom-cyclonedx
           path: crates/iso-parser/**/*.cdx.json
@@ -117,7 +117,7 @@ jobs:
     name: Secret scanning (gitleaks)
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Install gitleaks
@@ -133,9 +133,9 @@ jobs:
     container:
       image: returntocorp/semgrep:latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: semgrep scan --config=p/rust --config=p/security-audit --error --sarif --output semgrep.sarif .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: semgrep-sarif
@@ -146,7 +146,7 @@ jobs:
     name: Nix flake smoke-build
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v27
         with:
           extra_nix_config: |
