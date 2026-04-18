@@ -1,0 +1,39 @@
+{
+  "AllDisks": [
+    "disk4",
+    "disk4s1",
+    "disk4s2"
+  ],
+  "AllDisksAndPartitions": [
+    {
+      "Content": "GUID_partition_scheme",
+      "DeviceIdentifier": "disk4",
+      "OSInternal": false,
+      "Partitions": [
+        {
+          "Content": "EFI",
+          "DeviceIdentifier": "disk4s1",
+          "DiskUUID": "C9B0A5C0-4A00-4EAE-8A6D-00000000EF1F",
+          "Size": 536870912,
+          "VolumeName": "EFI",
+          "VolumeUUID": "0000-EFI0"
+        },
+        {
+          "Content": "Microsoft Basic Data",
+          "DeviceIdentifier": "disk4s2",
+          "DiskUUID": "C9B0A5C0-4A00-4EAE-8A6D-00000000A150",
+          "Size": 15539560448,
+          "VolumeName": "AEGIS-ISOS",
+          "VolumeUUID": "0000-A150"
+        }
+      ],
+      "Size": 16102883328
+    }
+  ],
+  "VolumesFromDisks": [
+    "AEGIS-ISOS"
+  ],
+  "WholeDisks": [
+    "disk4"
+  ]
+}

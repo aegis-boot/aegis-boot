@@ -31,13 +31,27 @@ pub fn run(args: &[String]) -> ExitCode {
 pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
     let mut explicit_dev: Option<&str> = None;
     let mut assume_yes = false;
-    for a in args {
+    let mut prebuilt_image: Option<PathBuf> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
         match a.as_str() {
             "--help" | "-h" => {
                 print_help();
                 return Ok(());
             }
             "--yes" | "-y" => assume_yes = true,
+            "--image" => {
+                i += 1;
+                let Some(p) = args.get(i) else {
+                    eprintln!("aegis-boot flash: --image requires a path argument");
+                    return Err(2);
+                };
+                prebuilt_image = Some(PathBuf::from(p));
+            }
+            arg if arg.starts_with("--image=") => {
+                prebuilt_image = Some(PathBuf::from(&arg["--image=".len()..]));
+            }
             arg if arg.starts_with("--") => {
                 eprintln!("aegis-boot flash: unknown option '{arg}'");
                 return Err(2);
@@ -49,6 +63,18 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
                 }
                 explicit_dev = Some(other);
             }
+        }
+        i += 1;
+    }
+
+    // Validate --image path up front so we fail before asking for confirmation.
+    if let Some(path) = prebuilt_image.as_ref() {
+        if !path.is_file() {
+            eprintln!(
+                "aegis-boot flash: --image path is not a file: {}",
+                path.display()
+            );
+            return Err(1);
         }
     }
 
@@ -64,7 +90,7 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
     }
 
     // Step 3: build + write + verify.
-    match flash(&drive) {
+    match flash(&drive, prebuilt_image.as_deref()) {
         Ok(()) => {
             println!();
             println!("Done. Next steps:");
@@ -80,8 +106,15 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
             println!("  3. Boot the target machine from the stick (UEFI boot menu),");
             println!("     pick an ISO in rescue-tui, and press Enter.");
             println!();
+            #[cfg(target_os = "linux")]
             println!(
                 "Manual fallback: sudo mount {}2 /mnt && cp *.iso /mnt/ && sudo umount /mnt",
+                drive.dev.display()
+            );
+            #[cfg(target_os = "macos")]
+            println!(
+                "Manual fallback: open Finder (the AEGIS_ISOS volume will mount automatically) \
+                 and drag ISOs into it; then `diskutil eject {}`.",
                 drive.dev.display()
             );
             Ok(())
@@ -96,10 +129,12 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
 fn print_help() {
     println!("aegis-boot flash — write aegis-boot to a USB stick");
     println!();
-    println!("USAGE: aegis-boot flash [/dev/sdX] [--yes]");
-    println!("  No argument   = auto-detect removable drives.");
-    println!("  /dev/sdX      = flash to that drive.");
-    println!("  --yes / -y    = skip the 'type flash to confirm' prompt (DESTRUCTIVE).");
+    println!("USAGE: aegis-boot flash [DEVICE] [--yes] [--image PATH]");
+    println!("  No DEVICE        = auto-detect removable drives.");
+    println!("  /dev/sdX (Linux) or /dev/diskN (macOS) = flash to that drive.");
+    println!("  --yes / -y       = skip the 'type flash to confirm' prompt (DESTRUCTIVE).");
+    println!("  --image PATH     = write a pre-built image instead of invoking mkusb.sh.");
+    println!("                     Required on macOS (mkusb.sh is Linux-only).");
 }
 
 fn select_drive(explicit: Option<&str>) -> Option<Drive> {
@@ -243,39 +278,28 @@ fn confirm_destructive(drive: &Drive) -> bool {
     line.trim() == "flash"
 }
 
-fn flash(drive: &Drive) -> Result<(), String> {
-    let repo_root = find_repo_root().ok_or("cannot find aegis-boot repo root (no Cargo.toml)")?;
-    let mkusb = repo_root.join("scripts/mkusb.sh");
-    let out_dir = repo_root.join("out");
+fn flash(drive: &Drive, prebuilt_image: Option<&Path>) -> Result<(), String> {
+    // Step 3a: get the image. --image skips the build; otherwise we
+    // shell out to mkusb.sh (Linux only) to generate a fresh image.
+    let (img_path, img_size) = if let Some(path) = prebuilt_image {
+        let size = std::fs::metadata(path)
+            .map(|m| m.len())
+            .map_err(|e| format!("stat: {e}"))?;
+        (path.to_path_buf(), size)
+    } else {
+        build_image_via_mkusb(drive)?
+    };
 
-    // Step 3a: build the image via mkusb.sh.
-    println!();
-    println!("Building aegis-boot image...");
-
-    // Compute disk size from drive capacity — use the full stick.
-    let disk_mb = (drive.size_bytes / (1024 * 1024)).max(2048);
-
-    let status = Command::new("bash")
-        .arg(&mkusb)
-        .env("OUT_DIR", &out_dir)
-        .env("DISK_SIZE_MB", disk_mb.to_string())
-        .status()
-        .map_err(|e| format!("mkusb.sh exec failed: {e}"))?;
-
-    if !status.success() {
-        return Err(format!("mkusb.sh exited with {status}"));
+    // Step 3b: macOS requires an explicit unmount of the disk's volumes
+    // before dd'ing to the raw device. Linux doesn't; skip it there.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("diskutil")
+            .args(["unmountDisk", &drive.dev.display().to_string()])
+            .status();
     }
 
-    let img_path = out_dir.join("aegis-boot.img");
-    if !img_path.is_file() {
-        return Err("mkusb.sh did not produce out/aegis-boot.img".to_string());
-    }
-
-    let img_size = std::fs::metadata(&img_path)
-        .map(|m| m.len())
-        .map_err(|e| format!("stat: {e}"))?;
-
-    // Step 3b: dd with progress.
+    // Step 3c: dd with progress.
     println!();
     #[allow(clippy::cast_precision_loss)]
     let img_gb = img_size as f64 / 1_073_741_824.0;
@@ -285,16 +309,16 @@ fn flash(drive: &Drive) -> Result<(), String> {
         drive.dev.display()
     );
 
+    // On macOS, /dev/diskN is buffered; /dev/rdiskN is raw and 10x
+    // faster. We rewrite the target here so the operator doesn't need
+    // to know the trick.
+    #[cfg(target_os = "macos")]
+    let dd_target = raw_disk_path(&drive.dev);
+    #[cfg(not(target_os = "macos"))]
+    let dd_target = drive.dev.clone();
+
     let dd_status = Command::new("sudo")
-        .args([
-            "dd",
-            &format!("if={}", img_path.display()),
-            &format!("of={}", drive.dev.display()),
-            "bs=4M",
-            "oflag=direct",
-            "conv=fsync",
-            "status=progress",
-        ])
+        .args(dd_args(&img_path, &dd_target))
         .status()
         .map_err(|e| format!("dd exec failed: {e}"))?;
 
@@ -302,9 +326,10 @@ fn flash(drive: &Drive) -> Result<(), String> {
         return Err(format!("dd exited with {dd_status}"));
     }
 
-    // Step 3c: sync + verify partition table.
+    // Step 3d: sync + partition rescan. partprobe is Linux-only.
     println!("Syncing...");
     let _ = Command::new("sudo").arg("sync").status();
+    #[cfg(target_os = "linux")]
     let _ = Command::new("sudo")
         .args(["partprobe", &drive.dev.display().to_string()])
         .status();
@@ -340,6 +365,103 @@ fn flash(drive: &Drive) -> Result<(), String> {
     Ok(())
 }
 
+/// Shell out to `scripts/mkusb.sh` (Linux only) to build a fresh image.
+/// Returns the image path + size. On non-Linux, returns a typed error
+/// pointing the operator at `--image` or at Docker.
+fn build_image_via_mkusb(drive: &Drive) -> Result<(PathBuf, u64), String> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = drive;
+        Err(format!(
+            "building aegis-boot.img requires Linux (uses losetup/sbsign/sgdisk); \
+             pass --image /path/to/aegis-boot.img with a pre-built image. \
+             Running on {}.",
+            crate::detect::platform_display_name()
+        ))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let repo_root =
+            find_repo_root().ok_or("cannot find aegis-boot repo root (no Cargo.toml)")?;
+        let mkusb = repo_root.join("scripts/mkusb.sh");
+        let out_dir = repo_root.join("out");
+
+        println!();
+        println!("Building aegis-boot image...");
+
+        let disk_mb = (drive.size_bytes / (1024 * 1024)).max(2048);
+
+        let status = Command::new("bash")
+            .arg(&mkusb)
+            .env("OUT_DIR", &out_dir)
+            .env("DISK_SIZE_MB", disk_mb.to_string())
+            .status()
+            .map_err(|e| format!("mkusb.sh exec failed: {e}"))?;
+
+        if !status.success() {
+            return Err(format!("mkusb.sh exited with {status}"));
+        }
+
+        let img_path = out_dir.join("aegis-boot.img");
+        if !img_path.is_file() {
+            return Err("mkusb.sh did not produce out/aegis-boot.img".to_string());
+        }
+
+        let img_size = std::fs::metadata(&img_path)
+            .map(|m| m.len())
+            .map_err(|e| format!("stat: {e}"))?;
+
+        Ok((img_path, img_size))
+    }
+}
+
+/// Platform-appropriate `dd` argv.
+///
+/// On Linux: `oflag=direct` + `conv=fsync` + `status=progress`.
+/// On macOS: `dd` accepts `bs=4m` (lowercase) and doesn't support
+/// `oflag=direct` or `status=progress`; use `bs` + `conv=sync`.
+fn dd_args(img_path: &Path, target: &Path) -> Vec<String> {
+    let ifv = format!("if={}", img_path.display());
+    let ofv = format!("of={}", target.display());
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            "dd".to_string(),
+            ifv,
+            ofv,
+            "bs=4m".to_string(),
+            "conv=sync".to_string(),
+        ]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        vec![
+            "dd".to_string(),
+            ifv,
+            ofv,
+            "bs=4M".to_string(),
+            "oflag=direct".to_string(),
+            "conv=fsync".to_string(),
+            "status=progress".to_string(),
+        ]
+    }
+}
+
+/// Convert `/dev/diskN` → `/dev/rdiskN`. macOS buffers writes to the
+/// non-raw node; the raw variant is ~10x faster for dd. No-op if the
+/// input already starts with `/dev/rdisk` or isn't recognizable.
+#[cfg(target_os = "macos")]
+fn raw_disk_path(dev: &Path) -> PathBuf {
+    let s = dev.to_string_lossy();
+    if let Some(rest) = s.strip_prefix("/dev/disk") {
+        PathBuf::from(format!("/dev/rdisk{rest}"))
+    } else {
+        dev.to_path_buf()
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn find_repo_root() -> Option<PathBuf> {
     // Check common locations.
     for candidate in [std::env::current_dir().ok(), dirs_from_exe()]
@@ -359,6 +481,7 @@ fn find_repo_root() -> Option<PathBuf> {
     None
 }
 
+#[cfg(target_os = "linux")]
 fn dirs_from_exe() -> Option<PathBuf> {
     // Used to locate the developer's repo workspace (walks up to find
     // `Cargo.toml + crates/`), not for any security decision. A
