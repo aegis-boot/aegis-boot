@@ -37,6 +37,7 @@ mod inventory;
 mod man;
 mod mounts;
 mod plan;
+mod readback;
 mod tour;
 mod update;
 mod userfacing;
