@@ -51,6 +51,9 @@ impl CompatLevel {
 impl CompatEntry {
     /// Convenience for crate consumers (e.g., `doctor`) that want the
     /// level label without pulling in the `CompatLevel` enum directly.
+    /// Only called from `doctor::check_compat_db_coverage` which is
+    /// `cfg(target_os = "linux")`; suppress dead-code on other OSes.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn level_label(&self) -> &'static str {
         self.level.label()
     }
@@ -291,6 +294,10 @@ fn run_submit(json_mode: bool) -> Result<(), u8> {
 /// don't need a general-purpose one, just enough to get the operator's
 /// vendor / model / firmware strings through GitHub's URL parser. Encodes
 /// everything outside RFC 3986 §2.3 unreserved ASCII.
+///
+/// Only called from the `--submit` flow (Linux-only) and from tests;
+/// suppress dead-code on non-Linux non-test builds.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 fn percent_encode(s: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len());
@@ -309,6 +316,10 @@ fn percent_encode(s: &str) -> String {
 /// that opens GitHub's issue form with the passed fields populated.
 /// `pub(crate)` so the unit tests can round-trip it without running the
 /// full `run_submit` flow.
+///
+/// Only called from the `--submit` flow (Linux-only) and from tests;
+/// suppress dead-code on non-Linux non-test builds.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 pub(crate) fn build_hardware_report_url(
     vendor: Option<&str>,
     model: Option<&str>,
