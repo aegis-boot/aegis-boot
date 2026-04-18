@@ -142,10 +142,7 @@ mod tests {
         // Fixture has 3 disks: 1 NVMe (system), 2 USB. Only 2 USB
         // should survive; NVMe is BusType!=USB AND IsBoot+IsSystem.
         assert_eq!(drives.len(), 2);
-        let sandisk = drives
-            .iter()
-            .find(|d| d.model.contains("SanDisk"))
-            .unwrap();
+        let sandisk = drives.iter().find(|d| d.model.contains("SanDisk")).unwrap();
         assert_eq!(sandisk.dev, PathBuf::from("\\\\.\\PhysicalDrive2"));
         assert_eq!(sandisk.size_bytes, 16_102_883_328);
         assert_eq!(sandisk.partitions, 2);
