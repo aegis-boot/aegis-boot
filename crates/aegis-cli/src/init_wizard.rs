@@ -24,8 +24,6 @@
 //! the prompt library (or hand-roll on `std::io::stdin`) in PR2 with
 //! a clean unit-tested foundation underneath.
 
-#![allow(dead_code)] // Foundation PR — callers wired in follow-up. See module docs.
-
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -226,16 +224,14 @@ pub fn parse_menu_selection(input: &str, max_n: usize) -> Option<usize> {
 
 #[derive(Deserialize)]
 struct FindmntRoot {
+    // The wire shape of `findmnt -J` puts an array of mount records
+    // under `filesystems`. We only need to know whether the array is
+    // non-empty (the device is mounted somewhere); the per-entry
+    // fields (target, source, fstype, options, …) are not inspected,
+    // so we deserialize as opaque `serde_json::Value` to avoid drift
+    // when findmnt's per-entry shape changes between distro versions.
     #[serde(default)]
-    filesystems: Vec<FindmntEntry>,
-}
-
-#[derive(Deserialize)]
-struct FindmntEntry {
-    #[serde(default)]
-    target: Option<String>,
-    #[serde(default)]
-    source: Option<String>,
+    filesystems: Vec<serde_json::Value>,
 }
 
 /// Returns true when the parsed `findmnt -J <device>` output reports

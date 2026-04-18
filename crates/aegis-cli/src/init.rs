@@ -23,10 +23,12 @@
 //! every `add` call (existing plumbing in `attest.rs`), so the whole
 //! `init` run produces one audit record.
 
+use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 use crate::catalog::find_entry;
+use crate::init_wizard;
 
 /// A named bundle of catalog slugs for `aegis-boot init --profile ...`.
 pub struct Profile {
@@ -133,13 +135,39 @@ pub fn run(args: &[String]) -> ExitCode {
 
     print_header(profile, parsed.device.as_deref());
 
+    // PR2 of #245: interactive wizard with serial-confirmation safety
+    // gate. Triggers when no explicit device was passed AND not running
+    // unattended (--yes). Lets the operator pick a removable USB drive
+    // by number, see its serial, type the last 4 chars to confirm, then
+    // hands the resolved device path back to flash with --yes (the
+    // wizard already did the human-confirmation work).
+    //
+    // Skipped when --device is explicit (operator already chose) OR
+    // --yes is set (unattended; no human to type the serial token).
+    let mut device = parsed.device.clone();
+    let wizard_confirmed_device = device.is_none() && !parsed.yes;
+    if wizard_confirmed_device {
+        match run_init_wizard(parsed.force) {
+            Ok(dev) => device = Some(dev),
+            Err(msg) => {
+                eprintln!("aegis-boot init: {msg}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+
     if !parsed.skip_doctor {
-        if let Err(code) = doctor_preflight(parsed.device.as_deref(), parsed.yes) {
+        if let Err(code) = doctor_preflight(device.as_deref(), parsed.yes) {
             return ExitCode::from(code);
         }
     }
 
-    if let Err(code) = flash_step(parsed.device.as_deref(), parsed.yes) {
+    // The wizard's serial-confirmation IS the destructive consent gate.
+    // Once it passes, downstream flash should not re-prompt — pass --yes
+    // to flash so the operator isn't asked to type 'flash' a second time
+    // for the device they already typed the serial of.
+    let flash_yes = parsed.yes || wizard_confirmed_device;
+    if let Err(code) = flash_step(device.as_deref(), flash_yes) {
         return ExitCode::from(code);
     }
 
@@ -248,12 +276,22 @@ fn resolve_profile(name: &str) -> Option<&'static Profile> {
 // ---- arg parsing ------------------------------------------------------------
 
 #[derive(Debug)]
+// All five flags are independent booleans on the command-line surface;
+// packing into a bitflag struct (clippy::struct_excessive_bools warns
+// at >3) would obscure the 1:1 mapping to argv flags without buying
+// anything. Allow at the type level.
+#[allow(clippy::struct_excessive_bools)]
 struct Parsed {
     profile_name: String,
     device: Option<String>,
     yes: bool,
     skip_doctor: bool,
     skip_gpg: bool,
+    /// `--force` skips the wizard's "device is currently mounted" gate
+    /// (#245). Useful when the operator deliberately wants to flash a
+    /// stick that's currently mounted (e.g. `AEGIS_ISOS` already in use
+    /// by `aegis-boot list`); rare in practice.
+    force: bool,
 }
 
 fn parse_flags(args: &[String]) -> Result<Parsed, String> {
@@ -262,6 +300,7 @@ fn parse_flags(args: &[String]) -> Result<Parsed, String> {
     let mut yes = false;
     let mut skip_doctor = false;
     let mut skip_gpg = false;
+    let mut force = false;
     let mut iter = args.iter();
     while let Some(a) = iter.next() {
         match a.as_str() {
@@ -275,6 +314,7 @@ fn parse_flags(args: &[String]) -> Result<Parsed, String> {
             "--yes" | "-y" => yes = true,
             "--no-doctor" => skip_doctor = true,
             "--no-gpg" => skip_gpg = true,
+            "--force" => force = true,
             "--profile" => {
                 let Some(v) = iter.next() else {
                     return Err("--profile requires a name argument".to_string());
@@ -304,7 +344,167 @@ fn parse_flags(args: &[String]) -> Result<Parsed, String> {
         yes,
         skip_doctor,
         skip_gpg,
+        force,
     })
+}
+
+// ---- interactive wizard (#245 PR2) -----------------------------------------
+
+/// Drive the operator through the serial-confirmation safety gate from
+/// [`init_wizard`]. Returns the resolved `/dev/sdX` path on confirmation,
+/// or an `Err` describing what went wrong / what the operator typed
+/// instead of accepting.
+///
+/// Called when `init` is invoked without an explicit device AND without
+/// `--yes`. The wizard performs all the destructive consent in one go,
+/// so the downstream `flash` step gets `--yes` and won't re-prompt.
+fn run_init_wizard(force: bool) -> Result<String, String> {
+    println!("--- pick a target stick ---");
+    let lsblk_out = run_lsblk_json()?;
+    let drives = init_wizard::parse_lsblk_removable_usb(&lsblk_out)
+        .map_err(|e| format!("lsblk JSON parse: {e}"))?;
+    if drives.is_empty() {
+        return Err(concat!(
+            "No removable USB drives detected.\n",
+            "  - plug a USB stick in and try again, or\n",
+            "  - pass an explicit device:  aegis-boot init /dev/sdX --yes",
+        )
+        .to_string());
+    }
+
+    print!("{}", init_wizard::format_drive_menu(&drives));
+    println!();
+
+    let idx = if drives.len() == 1 {
+        // One device — confirm "Y" to use, anything else cancels. Saves
+        // the operator typing a numeral when there's nothing to choose
+        // from.
+        print!("Use {} [Y/n]: ", drives[0].dev.display());
+        io::stdout().flush().ok();
+        let line = read_stdin_line()?;
+        let trimmed = line.trim();
+        if !(trimmed.is_empty() || trimmed.eq_ignore_ascii_case("y")) {
+            return Err("Cancelled (single drive declined).".to_string());
+        }
+        0
+    } else {
+        print!("Select target [1-{}]: ", drives.len());
+        io::stdout().flush().ok();
+        let line = read_stdin_line()?;
+        init_wizard::parse_menu_selection(&line, drives.len()).ok_or_else(|| {
+            format!(
+                "Invalid selection (expected 1-{}, got '{}').",
+                drives.len(),
+                line.trim()
+            )
+        })?
+    };
+    let chosen = &drives[idx];
+
+    // Refuse-on-mounted gate. Catches "operator forgot to eject the
+    // previous AEGIS_ISOS run". --force overrides for the rare cases
+    // (deliberate reformat, partition busy by another aegis-boot
+    // subcommand we tolerate).
+    if !force {
+        let findmnt_out = run_findmnt_json(&chosen.dev.display().to_string()).unwrap_or_default();
+        if let Ok(true) = init_wizard::is_target_mounted(&findmnt_out) {
+            return Err(format!(
+                "{} is currently mounted. Unmount it first or pass --force.",
+                chosen.dev.display()
+            ));
+        }
+    }
+
+    let Some(serial) = chosen.serial.as_deref() else {
+        return Err(format!(
+            "{} has no kernel-reported serial number; can't drive the serial-confirmation gate. \
+             Pass an explicit device + --yes to bypass: aegis-boot init {} --yes",
+            chosen.dev.display(),
+            chosen.dev.display()
+        ));
+    };
+    let token = init_wizard::serial_token(serial).ok_or_else(|| {
+        format!(
+            "Serial '{serial}' has fewer than {} alphanumeric chars; cannot \
+             produce a confirmation token. Pass --yes to bypass.",
+            init_wizard::SERIAL_CONFIRMATION_LEN,
+        )
+    })?;
+
+    println!();
+    println!(
+        "You selected {} ({}, {}).",
+        chosen.dev.display(),
+        chosen.model,
+        chosen.size_human()
+    );
+    println!("ALL DATA on this device WILL BE ERASED.");
+    println!();
+    print!(
+        "Confirm by typing the last {} chars of the serial '{}': ",
+        init_wizard::SERIAL_CONFIRMATION_LEN,
+        serial
+    );
+    io::stdout().flush().ok();
+    let confirm = read_stdin_line()?;
+    if !init_wizard::serial_matches(&confirm, &token) {
+        return Err(format!(
+            "Serial confirmation did not match (expected last {} chars '{}'). Cancelled.",
+            init_wizard::SERIAL_CONFIRMATION_LEN,
+            token
+        ));
+    }
+    println!("  ✓ Match. Proceeding.");
+    println!();
+    println!("{}", init_wizard::trust_narrative_paragraph());
+    println!();
+    print!("Press Enter to continue, or Ctrl-C to abort: ");
+    io::stdout().flush().ok();
+    let _ack = read_stdin_line()?;
+    Ok(chosen.dev.display().to_string())
+}
+
+/// Run `lsblk -J -b -o NAME,SIZE,MODEL,SERIAL,RM,TRAN` and return its
+/// stdout. Output is JSON suitable for [`init_wizard::parse_lsblk_removable_usb`].
+fn run_lsblk_json() -> Result<String, String> {
+    let out = Command::new("lsblk")
+        .args(["-J", "-b", "-o", "NAME,SIZE,MODEL,SERIAL,RM,TRAN"])
+        .output()
+        .map_err(|e| format!("lsblk exec: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "lsblk failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    String::from_utf8(out.stdout).map_err(|e| format!("lsblk stdout not UTF-8: {e}"))
+}
+
+/// Run `findmnt -J <device>` and return its stdout. Empty stdout (no
+/// match) returns `Ok("")`. Output is JSON suitable for
+/// [`init_wizard::is_target_mounted`].
+fn run_findmnt_json(dev: &str) -> Result<String, String> {
+    let out = Command::new("findmnt")
+        .args(["-J", dev])
+        .output()
+        .map_err(|e| format!("findmnt exec: {e}"))?;
+    // findmnt returns exit 1 when nothing matches — that's "not mounted",
+    // not an error. Treat any non-zero exit as "not mounted, no JSON".
+    if !out.status.success() {
+        return Ok(String::new());
+    }
+    String::from_utf8(out.stdout).map_err(|e| format!("findmnt stdout not UTF-8: {e}"))
+}
+
+/// Read one line from stdin. Errors propagate as descriptive strings
+/// so the caller can show them to the operator.
+fn read_stdin_line() -> Result<String, String> {
+    let mut line = String::new();
+    io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|e| format!("stdin read: {e}"))?;
+    Ok(line)
 }
 
 // ---- user-facing output -----------------------------------------------------
@@ -358,11 +558,19 @@ fn print_help() {
     println!();
     println!("OPTIONS:");
     println!("  --profile NAME     Profile to install (default: panic-room)");
-    println!("  --yes, -y          Skip interactive confirmations (destructive)");
+    println!("  --yes, -y          Skip interactive confirmations (destructive); also");
+    println!("                     skips the wizard's serial-confirmation gate (#245)");
+    println!("  --force            Skip the wizard's 'device is currently mounted' gate");
     println!("  --no-doctor        Skip doctor preflight (not recommended)");
     println!("  --no-gpg           Skip GPG verification on fetched ISOs");
     println!("  --list-profiles    Print profile names, one per line (for completion)");
     println!("  --help, -h         This message");
+    println!();
+    println!("INTERACTIVE MODE (no /dev/sdX, no --yes):");
+    println!("  The serial-confirmation wizard guards against wrong-device dd: pick a");
+    println!("  USB stick from a numbered list, see its hardware serial, type the");
+    println!("  last 4 chars to confirm. (#245) See docs/HOW_IT_WORKS.md for the");
+    println!("  full trust narrative.");
     println!();
     println!("PROFILES:");
     for p in PROFILES {
