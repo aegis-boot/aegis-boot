@@ -687,6 +687,12 @@ fn raw_disk_path(dev: &Path) -> PathBuf {
 /// available" prefix). Carries the device path through the message
 /// so the `suggestions()` renderer can copy-paste it into the three
 /// alternatives. Pure function — no fs i/o.
+///
+/// Linux-only because its sole caller is `build_image_via_mkusb`,
+/// which is behind `#[cfg(target_os = "linux")]` — the macOS /
+/// Windows cross-compile check otherwise fails on `-D warnings` with
+/// "function is never used".
+#[cfg(target_os = "linux")]
 fn no_image_source_error(drive: &Drive) -> String {
     format!(
         "no image source available (not in a repo checkout and --image not supplied) for device {}",
@@ -1540,12 +1546,16 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn no_image_source_error_message_carries_device_path() {
         // Unit test the helper that produces the classifier-friendly
         // string; guards against a future drift that would either
         // change the prefix (breaking classify) or drop the device
         // path (breaking suggestions() interpolation).
+        //
+        // Linux-only: the helper is cfg-gated to the only target
+        // where `build_image_via_mkusb` actually calls it.
         let drive = Drive {
             dev: PathBuf::from("/dev/sdc"),
             model: String::new(),
