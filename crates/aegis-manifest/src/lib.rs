@@ -123,6 +123,14 @@ pub const COMPAT_SUBMIT_SCHEMA_VERSION: u32 = 1;
 /// contracts.
 pub const DOCTOR_SCHEMA_VERSION: u32 = 1;
 
+/// Locked schema version for the [`CliError`] envelope — the
+/// generic `{schema_version, error}` shape emitted by any
+/// subcommand that fails *before* it can produce its
+/// subcommand-specific `--json` envelope. Shared by multiple
+/// subcommands because the pre-dispatch error path is identical
+/// across them.
+pub const CLI_ERROR_SCHEMA_VERSION: u32 = 1;
+
 /// Top-level manifest body. Serialized field order matches the
 /// declaration order below — relied on for canonical JSON stability
 /// (the signature is computed over `serde_json::to_vec(&Manifest)`).
@@ -997,6 +1005,24 @@ pub struct DoctorRow {
     pub name: String,
     /// Single-line detail (filepath, value, or error message).
     pub detail: String,
+}
+
+/// Generic error envelope emitted when a subcommand fails before
+/// it can produce its subcommand-specific `--json` envelope.
+/// Examples: `aegis-boot list --json` before mount-resolution
+/// succeeds; `aegis-boot verify --json` before a stick is found.
+///
+/// Kept deliberately minimal (just `schema_version` + `error`) so
+/// scripted consumers can parse it without knowing which
+/// subcommand was called. Shared across subcommands because the
+/// pre-dispatch failure path is semantically identical.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CliError {
+    /// Wire-format version. See [`CLI_ERROR_SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// Human-readable error message.
+    pub error: String,
 }
 
 /// One curated catalog entry. Used in both
@@ -1878,5 +1904,28 @@ mod tests {
         let body = serde_json::to_string(&r).expect("serialize");
         let parsed: DoctorRow = serde_json::from_str(&body).expect("parse");
         assert_eq!(r, parsed);
+    }
+
+    #[test]
+    fn cli_error_schema_version_is_one() {
+        assert_eq!(CLI_ERROR_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn cli_error_round_trips_and_escapes_properly() {
+        // serde_json handles the escaping — no more hand-rolled
+        // json_escape needed.
+        let e = CliError {
+            schema_version: CLI_ERROR_SCHEMA_VERSION,
+            error: "mount failed: \"/dev/sdX\" is not removable".to_string(),
+        };
+        let body = serde_json::to_string(&e).expect("serialize");
+        let parsed: CliError = serde_json::from_str(&body).expect("parse");
+        assert_eq!(e, parsed);
+        // The embedded quotes must be properly escaped on the wire.
+        assert!(
+            body.contains(r#"\"/dev/sdX\""#),
+            "embedded quotes must be escaped: {body}"
+        );
     }
 }

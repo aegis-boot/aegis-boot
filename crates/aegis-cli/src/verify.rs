@@ -61,10 +61,14 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
         Ok(m) => m,
         Err(e) => {
             if json_mode {
-                println!(
-                    "{{ \"schema_version\": 1, \"error\": \"{}\" }}",
-                    crate::doctor::json_escape(&e)
-                );
+                let envelope = aegis_manifest::CliError {
+                    schema_version: aegis_manifest::CLI_ERROR_SCHEMA_VERSION,
+                    error: e.clone(),
+                };
+                match serde_json::to_string_pretty(&envelope) {
+                    Ok(body) => println!("{body}"),
+                    Err(err) => eprintln!("aegis-boot verify: serialize error envelope: {err}"),
+                }
             } else {
                 eprintln!("aegis-boot verify: {e}");
             }

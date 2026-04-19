@@ -234,31 +234,11 @@ fn band_for_score(score: u8) -> &'static str {
     }
 }
 
-/// Minimal JSON string escaper: handles the five characters RFC 8259
-/// requires (`"`, `\`, `\n`, `\r`, `\t`), plus control characters
-/// below `0x20` as `\u00XX`. Sufficient for check names / details —
-/// doctor doesn't carry arbitrary user input. Shared with other
-/// `--json` surfaces (`list --json`, `attest --json`) so every
-/// aegis-boot structured-output formatter uses the same escape rules.
-pub(crate) fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            // Control chars beyond \t/\n/\r: emit as \u00XX.
-            c if (c as u32) < 0x20 => {
-                use std::fmt::Write as _;
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
+// The `json_escape` helper (formerly here) was retired in
+// Phase 4b / #306 once every hand-rolled `--json` emitter in
+// aegis-cli migrated to typed envelopes in the `aegis-manifest`
+// crate. `serde_json` now handles JSON string escaping for every
+// `--json` surface, so a crate-local escaper is no longer needed.
 
 /// Entry point for `aegis-boot doctor [--stick /dev/sdX]`.
 pub fn run(args: &[String]) -> ExitCode {
@@ -1029,30 +1009,9 @@ mod tests {
         assert_eq!(band_for_score(0), "BROKEN");
     }
 
-    #[test]
-    fn json_escape_handles_quotes_and_backslash() {
-        assert_eq!(json_escape(r#"hello "world""#), r#"hello \"world\""#);
-        assert_eq!(json_escape(r"path\to\file"), r"path\\to\\file");
-    }
-
-    #[test]
-    fn json_escape_handles_newline_and_tab() {
-        assert_eq!(json_escape("line1\nline2"), "line1\\nline2");
-        assert_eq!(json_escape("col1\tcol2"), "col1\\tcol2");
-        assert_eq!(json_escape("\r\n"), "\\r\\n");
-    }
-
-    #[test]
-    fn json_escape_handles_control_chars() {
-        // NUL and SOH should render as \u00XX.
-        assert_eq!(json_escape("a\x00b"), "a\\u0000b");
-        assert_eq!(json_escape("\x01"), "\\u0001");
-    }
-
-    #[test]
-    fn json_escape_leaves_ascii_unchanged() {
-        assert_eq!(json_escape("plain ascii 123"), "plain ascii 123");
-    }
+    // `json_escape` tests were retired in Phase 4b / #306 alongside
+    // the helper itself — every `--json` emitter now goes through
+    // `serde_json`, which has its own escape-correctness test suite.
 
     #[test]
     fn report_with_json_mode_silences_inline_prints() {
