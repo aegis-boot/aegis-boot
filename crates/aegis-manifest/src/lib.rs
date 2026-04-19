@@ -42,11 +42,11 @@
 //!   written to `$XDG_DATA_HOME/aegis-boot/attestations/` for
 //!   chain-of-custody + fleet inventory. Phase 4c-1 of [#286].
 //! * **CLI envelopes** ([`Version`], [`ListReport`],
-//!   [`AttestListReport`], with [`VERSION_SCHEMA_VERSION`] /
-//!   [`LIST_SCHEMA_VERSION`] / [`ATTEST_LIST_SCHEMA_VERSION`]) —
-//!   the `--json` envelopes emitted by `aegis-boot --version --json`,
-//!   `aegis-boot list --json`, `aegis-boot attest list --json`, and
-//!   siblings. Phase 4b of [#286].
+//!   [`AttestListReport`], [`VerifyReport`], with their
+//!   `*_SCHEMA_VERSION` constants) — the `--json` envelopes
+//!   emitted by `aegis-boot --version --json`, `... list --json`,
+//!   `... attest list --json`, `... verify --json`, and siblings.
+//!   Phase 4b of [#286].
 //!
 //! Each contract is independently versioned — a change to one
 //! schema does not require bumping the others. They are co-located
@@ -86,6 +86,11 @@ pub const LIST_SCHEMA_VERSION: u32 = 1;
 /// emitted by `aegis-boot attest list --json`. Independent of the
 /// other envelope contracts.
 pub const ATTEST_LIST_SCHEMA_VERSION: u32 = 1;
+
+/// Locked schema version for the [`VerifyReport`] envelope emitted
+/// by `aegis-boot verify --json`. Independent of the other envelope
+/// contracts.
+pub const VERIFY_SCHEMA_VERSION: u32 = 1;
 
 /// Top-level manifest body. Serialized field order matches the
 /// declaration order below — relied on for canonical JSON stability
@@ -497,6 +502,115 @@ pub struct AttestListError {
     pub error: String,
 }
 
+/// Envelope emitted by `aegis-boot verify --json`. Re-verifies
+/// every ISO on a stick against its sidecar checksum and reports
+/// a per-ISO verdict plus a summary tally. Used by CI / monitoring
+/// to audit that a stick's ISOs haven't bit-rotted, been replaced,
+/// or lost their sha256 sidecars.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct VerifyReport {
+    /// Wire-format version. See [`VERIFY_SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// `aegis-boot` binary version that produced this envelope.
+    pub tool_version: String,
+    /// Filesystem mount path of the AEGIS_ISOS partition scanned.
+    pub mount_path: String,
+    /// Aggregate tally + overall pass/fail.
+    pub summary: VerifySummary,
+    /// Per-ISO verdict. Always present (even as `[]` for an empty
+    /// stick) so consumers see a stable field set.
+    pub isos: Vec<VerifyEntry>,
+}
+
+/// Tally of per-ISO verdicts in a [`VerifyReport`]. `any_failure`
+/// is the summary bit downstream tooling (CI, dashboards)
+/// branches on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct VerifySummary {
+    /// Total ISOs scanned. Equals the length of [`VerifyReport::isos`].
+    pub total: u32,
+    /// Count with `verdict: "Verified"`.
+    pub verified: u32,
+    /// Count with `verdict: "Mismatch"` — sha256 differed from
+    /// sidecar. A serious trust-chain signal; consumer should
+    /// surface aggressively.
+    pub mismatch: u32,
+    /// Count with `verdict: "Unreadable"` — file exists but
+    /// couldn't be opened / read (permission, bad media).
+    pub unreadable: u32,
+    /// Count with `verdict: "NotPresent"` — referenced in an
+    /// attestation manifest but missing from the partition.
+    pub not_present: u32,
+    /// True iff at least one of `mismatch`, `unreadable`, or
+    /// `not_present` is non-zero. The overall stick-health bit.
+    pub any_failure: bool,
+}
+
+/// One ISO's verdict inside a [`VerifyReport`]. The `verdict`
+/// field is the discriminator; variant-specific fields follow via
+/// `#[serde(flatten)]`. Consumer contract: branch on `verdict`,
+/// expect the fields documented for that variant.
+///
+/// Wire shape examples:
+///
+/// ```text
+/// {"name": "ubuntu.iso", "verdict": "Verified", "digest": "…", "source": "sidecar"}
+/// {"name": "debian.iso", "verdict": "Mismatch", "actual": "…", "expected": "…", "source": "sidecar"}
+/// {"name": "alpine.iso", "verdict": "Unreadable", "source": "sidecar", "reason": "permission denied"}
+/// {"name": "fedora.iso", "verdict": "NotPresent"}
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct VerifyEntry {
+    /// ISO filename.
+    pub name: String,
+    /// Verdict tag + variant-specific fields.
+    #[serde(flatten)]
+    pub verdict: VerifyVerdict,
+}
+
+/// Per-ISO verdict variants. Internally-tagged under `verdict`; a
+/// consumer that doesn't recognize a future variant can fall back
+/// on the tag string.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "verdict")]
+pub enum VerifyVerdict {
+    /// sha256 of the ISO matches the sidecar's recorded digest.
+    Verified {
+        /// Computed sha256 (lowercase hex).
+        digest: String,
+        /// Where the expected digest came from (e.g. `"sidecar"`
+        /// for the on-partition `.sha256` file).
+        source: String,
+    },
+    /// sha256 of the ISO does NOT match the sidecar — either
+    /// media corruption or a replaced/tampered file. Trust-chain
+    /// breaking.
+    Mismatch {
+        /// Computed sha256 of the ISO on disk.
+        actual: String,
+        /// Digest the sidecar asserts.
+        expected: String,
+        /// Where the expected digest came from.
+        source: String,
+    },
+    /// The ISO file exists but couldn't be opened / hashed.
+    Unreadable {
+        /// Where the expected digest came from (so the operator
+        /// knows which sidecar to reconcile against after
+        /// restoring access to the file).
+        source: String,
+        /// Human-readable explanation (permission, I/O error).
+        reason: String,
+    },
+    /// An ISO referenced elsewhere (e.g. in the attestation
+    /// manifest's `isos` list) is not on the partition.
+    NotPresent,
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -813,5 +927,149 @@ mod tests {
         let body = serde_json::to_string(&err).expect("serialize");
         let parsed: AttestListEntry = serde_json::from_str(&body).expect("parse");
         assert_eq!(err, parsed);
+    }
+
+    fn sample_verify_report() -> VerifyReport {
+        VerifyReport {
+            schema_version: VERIFY_SCHEMA_VERSION,
+            tool_version: "0.14.1".to_string(),
+            mount_path: "/run/media/alice/AEGIS_ISOS".to_string(),
+            summary: VerifySummary {
+                total: 4,
+                verified: 1,
+                mismatch: 1,
+                unreadable: 1,
+                not_present: 1,
+                any_failure: true,
+            },
+            isos: vec![
+                VerifyEntry {
+                    name: "ubuntu.iso".to_string(),
+                    verdict: VerifyVerdict::Verified {
+                        digest: "a".repeat(64),
+                        source: "sidecar".to_string(),
+                    },
+                },
+                VerifyEntry {
+                    name: "debian.iso".to_string(),
+                    verdict: VerifyVerdict::Mismatch {
+                        actual: "b".repeat(64),
+                        expected: "c".repeat(64),
+                        source: "sidecar".to_string(),
+                    },
+                },
+                VerifyEntry {
+                    name: "alpine.iso".to_string(),
+                    verdict: VerifyVerdict::Unreadable {
+                        source: "sidecar".to_string(),
+                        reason: "permission denied".to_string(),
+                    },
+                },
+                VerifyEntry {
+                    name: "fedora.iso".to_string(),
+                    verdict: VerifyVerdict::NotPresent,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn verify_schema_version_is_one() {
+        assert_eq!(VERIFY_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn verify_round_trip_preserves_all_variants() {
+        let r = sample_verify_report();
+        let body = serde_json::to_string(&r).expect("serialize");
+        let parsed: VerifyReport = serde_json::from_str(&body).expect("parse");
+        assert_eq!(r, parsed);
+    }
+
+    #[test]
+    fn verify_entry_emits_name_before_verdict() {
+        // Consumer contract: `name` is the first key so a
+        // streaming JSON parser can key off it before seeing the
+        // variant-specific fields. `#[serde(flatten)]` on the
+        // `verdict` field + internally-tagged enum gives us this
+        // ordering for free; this test is the guard.
+        let entry = VerifyEntry {
+            name: "x".to_string(),
+            verdict: VerifyVerdict::NotPresent,
+        };
+        let body = serde_json::to_string(&entry).expect("serialize");
+        let name_pos = body.find("\"name\"").expect("has name");
+        let verdict_pos = body.find("\"verdict\"").expect("has verdict");
+        assert!(
+            name_pos < verdict_pos,
+            "name must come before verdict: {body}"
+        );
+    }
+
+    #[test]
+    fn verify_notpresent_emits_no_variant_fields() {
+        // The unit variant NotPresent must NOT emit `digest`,
+        // `actual`, `expected`, `source`, or `reason` — those are
+        // variant-specific and would confuse a consumer that
+        // dispatched on the `verdict` tag.
+        let entry = VerifyEntry {
+            name: "x".to_string(),
+            verdict: VerifyVerdict::NotPresent,
+        };
+        let body = serde_json::to_string(&entry).expect("serialize");
+        for field in &["digest", "actual", "expected", "source", "reason"] {
+            let pattern = format!("\"{field}\"");
+            assert!(
+                !body.contains(&pattern),
+                "NotPresent must not emit {field}: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_verdict_tags_match_strings() {
+        // The four tag strings are part of the wire contract.
+        // Consumers branch on these literals; this test pins the
+        // spelling.
+        let v = VerifyEntry {
+            name: "x".to_string(),
+            verdict: VerifyVerdict::Verified {
+                digest: "d".to_string(),
+                source: "s".to_string(),
+            },
+        };
+        let body = serde_json::to_string(&v).expect("serialize");
+        assert!(body.contains("\"verdict\":\"Verified\""));
+
+        let m = VerifyEntry {
+            name: "x".to_string(),
+            verdict: VerifyVerdict::Mismatch {
+                actual: "a".to_string(),
+                expected: "e".to_string(),
+                source: "s".to_string(),
+            },
+        };
+        assert!(serde_json::to_string(&m)
+            .expect("ok")
+            .contains("\"verdict\":\"Mismatch\""));
+
+        let u = VerifyEntry {
+            name: "x".to_string(),
+            verdict: VerifyVerdict::Unreadable {
+                source: "s".to_string(),
+                reason: "r".to_string(),
+            },
+        };
+        assert!(serde_json::to_string(&u)
+            .expect("ok")
+            .contains("\"verdict\":\"Unreadable\""));
+
+        let n = VerifyEntry {
+            name: "x".to_string(),
+            verdict: VerifyVerdict::NotPresent,
+        };
+        assert!(serde_json::to_string(&n)
+            .expect("ok")
+            .contains("\"verdict\":\"NotPresent\""));
     }
 }
