@@ -75,4 +75,4 @@ Fallback stacks:
 
 ## Files
 
-See [renders/](./renders/) for rastered PNGs and [ascii/](./ascii/) for terminal-native forms. `logo-full.txt` is the 10-line README hero variant; `logo-compact.txt` is the 3-line TUI header.
+See [ascii/](./ascii/) for terminal-native forms — `logo-full.txt` is the 10-line README hero variant; `logo-compact.txt` is the 3-line TUI header. Rastered PNG renders of the SVG master (`aegis-boot-logo.svg` / `aegis-boot-logo-mono.svg`) are an on-demand build step via any standard SVG-to-PNG tool (Inkscape, rsvg-convert); the repo doesn't ship pre-rendered PNGs because there's no current consumer.

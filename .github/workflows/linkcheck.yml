@@ -1,0 +1,104 @@
+# Markdown link-checker — Phase 5 of #286 / closes #291.
+#
+# Two triggers:
+#
+#   1. Weekly scheduled run — catches link rot (third-party docs moved,
+#      release URLs pulled, GitHub issues deleted). Opens an issue with
+#      the broken-link report rather than failing silently.
+#
+#   2. On PR when any `*.md` changes — blocks merge if the change
+#      introduces or re-points a broken link.
+#
+# Security posture (per #286 Security Engineer consensus review):
+# `lychee` with external-URL checking is an SSRF-adjacent surface.
+# The `--exclude-all-private` flag + `--exclude-loopback` + the scheme
+# allowlist below reject RFC1918 / link-local / loopback / AWS-IMDS
+# (169.254.169.254) / metadata-service URLs before they're fetched.
+# `--max-redirects 5` caps redirect chains at a sane ceiling.
+
+name: Link check
+
+on:
+  pull_request:
+    paths:
+      - "**/*.md"
+      - "man/**"
+      - ".github/workflows/linkcheck.yml"
+  schedule:
+    # Monday 06:00 America/New_York = 10:00 UTC during DST, 11:00 UTC
+    # off-DST. Using 10:30 UTC as a stable compromise — the job runs
+    # within the same 8-hour business-day window either way.
+    - cron: "30 10 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write # the scheduled job files an issue on broken-link detection
+
+jobs:
+  lychee:
+    name: lychee markdown link check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # lychee-action@v2 is the official maintained wrapper. Pinned
+      # to a SHA-specific tag to avoid supply-chain surprises on the
+      # scheduled cadence. Bump the ref when upstream ships a stable
+      # new major.
+      #
+      # docs.rs/{iso-parser,iso-probe,kexec-loader} are excluded because
+      # those crates haven't published to crates.io yet — the forward-
+      # looking links in the library READMEs point at docs.rs URLs that
+      # will 404 until #51 (crates.io publishing) ships. Drop the
+      # exclude in the same PR that tags the first 1.0.0 publish.
+      - name: Run lychee
+        id: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # Input files: all markdown + the man-page template (which
+          # contains URLs in SEE ALSO / TROUBLESHOOTING refs). Exclude
+          # vendored / built paths that carry stale links by design.
+          args: >-
+            --no-progress
+            --max-redirects 5
+            --exclude-all-private
+            --exclude-loopback
+            --exclude-link-local
+            --accept 200..=299,403,429
+            --timeout 15
+            --max-concurrency 8
+            --exclude-path target
+            --exclude-path .git
+            --exclude-path node_modules
+            --exclude 'docs\.rs/(iso-parser|iso-probe|kexec-loader)$'
+            './**/*.md'
+            './man/**/*.in'
+          # On scheduled runs, don't fail the job — we want the "file
+          # an issue" step below to run. On PRs, DO fail the job so
+          # broken links block merge.
+          fail: ${{ github.event_name == 'pull_request' }}
+          format: markdown
+          output: ./lychee-report.md
+
+      # Scheduled runs that surface broken links → open an issue so
+      # the maintainer notices. PR runs skip this (the failed check
+      # is the signal).
+      - name: Create issue on broken-link rot (scheduled only)
+        if: github.event_name == 'schedule' && steps.lychee.outputs.exit_code != '0'
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: "linkcheck: broken links surfaced on scheduled scan"
+          content-filepath: ./lychee-report.md
+          labels: |
+            bug
+            documentation
+
+      - name: Upload report as artifact
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: lychee-report
+          path: ./lychee-report.md
+          retention-days: 30
+          if-no-files-found: ignore
