@@ -35,58 +35,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use serde::{Deserialize, Serialize};
-
 use crate::detect::Drive;
 
-/// Schema version for the attestation manifest.
-pub const SCHEMA_VERSION: u32 = 1;
-
-/// One flash + zero-or-more ISO additions, captured as a single JSON
-/// document on disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Attestation {
-    pub schema_version: u32,
-    pub tool_version: String,
-    /// RFC 3339 / ISO 8601 timestamp of the flash. Generated via the
-    /// host's `date -u +%FT%TZ` so we don't pull a chrono dep.
-    pub flashed_at: String,
-    pub operator: String,
-    pub host: HostInfo,
-    pub target: TargetInfo,
-    /// Empty at flash time. Each `aegis-boot add` appends an entry.
-    /// (Append-on-add lands in a follow-up; v0 just creates this empty.)
-    pub isos: Vec<IsoRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostInfo {
-    pub kernel: String,
-    /// One of "enforcing" / "disabled" / "unknown".
-    pub secure_boot: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TargetInfo {
-    pub device: String,
-    pub model: String,
-    pub size_bytes: u64,
-    /// Hex SHA-256 of the dd'd image.
-    pub image_sha256: String,
-    pub image_size_bytes: u64,
-    /// GPT disk GUID, captured from sgdisk after partprobe.
-    /// May be empty if sgdisk fails or the drive isn't partitioned.
-    pub disk_guid: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IsoRecord {
-    pub filename: String,
-    pub sha256: String,
-    pub size_bytes: u64,
-    pub sidecars: Vec<String>,
-    pub added_at: String,
-}
+// Wire-format serde types extracted to `aegis-manifest` in Phase
+// 4c-1 of #286. Re-exported here so `attest::Attestation` paths
+// continue to resolve unchanged across this module. Third-party
+// consumers of the on-disk attestation JSON depend on
+// `aegis-manifest` directly with a JSON Schema pin.
+pub use aegis_manifest::{
+    Attestation, HostInfo, IsoRecord, TargetInfo, ATTESTATION_SCHEMA_VERSION as SCHEMA_VERSION,
+};
 
 /// One-line summary of the attestation matching a mounted stick. Used
 /// by `aegis-boot list` to surface chain-of-custody info above the ISO
