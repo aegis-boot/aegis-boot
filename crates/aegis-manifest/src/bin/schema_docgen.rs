@@ -25,6 +25,9 @@
 //! * [`aegis_manifest::UpdateReport`] →
 //!   `docs/reference/schemas/aegis-boot-update.schema.json`
 //!   (Phase 4b-5 of [#286])
+//! * [`aegis_manifest::RecommendReport`] →
+//!   `docs/reference/schemas/aegis-boot-recommend.schema.json`
+//!   (Phase 4b-6 of [#286])
 //!
 //! CI's `manifest-schema-drift` job runs this in `--check` mode on
 //! every PR. Any time a field is added, removed, or retyped on any
@@ -51,7 +54,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use aegis_manifest::{
-    AttestListReport, Attestation, ListReport, Manifest, UpdateReport, VerifyReport, Version,
+    AttestListReport, Attestation, ListReport, Manifest, RecommendReport, UpdateReport,
+    VerifyReport, Version,
 };
 use schemars::schema_for;
 
@@ -100,6 +104,11 @@ fn targets() -> Vec<Target> {
             relative_path: "docs/reference/schemas/aegis-boot-update.schema.json",
             render: render_update_schema,
         },
+        Target {
+            name: "RecommendReport",
+            relative_path: "docs/reference/schemas/aegis-boot-recommend.schema.json",
+            render: render_recommend_schema,
+        },
     ]
 }
 
@@ -129,6 +138,10 @@ fn render_verify_schema() -> Result<String, String> {
 
 fn render_update_schema() -> Result<String, String> {
     render_pretty(&schema_for!(UpdateReport))
+}
+
+fn render_recommend_schema() -> Result<String, String> {
+    render_pretty(&schema_for!(RecommendReport))
 }
 
 /// Serialize a JSON Schema as pretty-printed JSON with a trailing

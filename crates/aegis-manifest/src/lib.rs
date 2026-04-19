@@ -42,11 +42,12 @@
 //!   written to `$XDG_DATA_HOME/aegis-boot/attestations/` for
 //!   chain-of-custody + fleet inventory. Phase 4c-1 of [#286].
 //! * **CLI envelopes** ([`Version`], [`ListReport`],
-//!   [`AttestListReport`], [`VerifyReport`], [`UpdateReport`], with
-//!   their `*_SCHEMA_VERSION` constants) — the `--json` envelopes
-//!   emitted by `aegis-boot --version --json`, `... list --json`,
-//!   `... attest list --json`, `... verify --json`, `... update --json`,
-//!   and siblings. Phase 4b of [#286].
+//!   [`AttestListReport`], [`VerifyReport`], [`UpdateReport`],
+//!   [`RecommendReport`], with their `*_SCHEMA_VERSION` constants)
+//!   — the `--json` envelopes emitted by `aegis-boot --version --json`,
+//!   `... list --json`, `... attest list --json`, `... verify --json`,
+//!   `... update --json`, `... recommend --json`, and siblings.
+//!   Phase 4b of [#286].
 //!
 //! Each contract is independently versioned — a change to one
 //! schema does not require bumping the others. They are co-located
@@ -96,6 +97,11 @@ pub const VERIFY_SCHEMA_VERSION: u32 = 1;
 /// by `aegis-boot update --json`. Independent of the other envelope
 /// contracts.
 pub const UPDATE_SCHEMA_VERSION: u32 = 1;
+
+/// Locked schema version for the [`RecommendReport`] envelope
+/// emitted by `aegis-boot recommend --json`. Independent of the
+/// other envelope contracts.
+pub const RECOMMEND_SCHEMA_VERSION: u32 = 1;
 
 /// Top-level manifest body. Serialized field order matches the
 /// declaration order below — relied on for canonical JSON stability
@@ -712,6 +718,103 @@ pub enum UpdateChainResult {
     },
 }
 
+/// Envelope emitted by `aegis-boot recommend --json`. Untagged
+/// wrapper around three mutually-exclusive shapes: a full catalog
+/// listing, a single-entry response, or a miss. Consumers branch
+/// on the presence of `entries` / `entry` / `error`.
+///
+/// The miss shape intentionally omits `tool_version` — matches
+/// the existing wire format. Future schema bumps can unify the
+/// three shapes; Phase 4b-6 preserves the current contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum RecommendReport {
+    /// Full catalog listing. Emitted when `aegis-boot recommend
+    /// --json` is called with no slug.
+    Catalog(RecommendCatalogReport),
+    /// Single-entry response. Emitted when the slug matched one
+    /// catalog entry exactly.
+    Single(RecommendSingleReport),
+    /// Miss — the slug didn't match any entry.
+    Miss(RecommendMissReport),
+}
+
+/// Full-catalog variant of [`RecommendReport`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RecommendCatalogReport {
+    /// Wire-format version. See [`RECOMMEND_SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// `aegis-boot` binary version that produced this envelope.
+    pub tool_version: String,
+    /// Total entries in the catalog. Equals `entries.len()`.
+    pub count: u32,
+    /// All catalog entries in the order `CATALOG` defines them
+    /// (typically alphabetical by slug).
+    pub entries: Vec<RecommendEntry>,
+}
+
+/// Single-entry variant of [`RecommendReport`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RecommendSingleReport {
+    /// Wire-format version. See [`RECOMMEND_SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// `aegis-boot` binary version that produced this envelope.
+    pub tool_version: String,
+    /// The matched catalog entry.
+    pub entry: RecommendEntry,
+}
+
+/// Miss variant of [`RecommendReport`] — no catalog entry matched
+/// the given slug. The envelope is deliberately asymmetric from
+/// the success variants (no `tool_version`) to match the existing
+/// wire format; tightening to always emit `tool_version` would be
+/// an additive (non-breaking) future change.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RecommendMissReport {
+    /// Wire-format version. See [`RECOMMEND_SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// Human-readable error ("no catalog entry matching '<slug>'").
+    pub error: String,
+}
+
+/// One curated catalog entry. Used in both
+/// [`RecommendCatalogReport::entries`] and
+/// [`RecommendSingleReport::entry`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RecommendEntry {
+    /// Short stable identifier (e.g. `"ubuntu-24.04-live-server"`).
+    /// Used by `aegis-boot fetch <slug>` to resolve a URL set.
+    pub slug: String,
+    /// Human-readable name (e.g. `"Ubuntu 24.04 LTS Live Server"`).
+    pub name: String,
+    /// CPU architecture (`"amd64"`, `"arm64"`, …).
+    pub arch: String,
+    /// ISO size in mebibytes (rounded to nearest; informational
+    /// for download-time estimates, not a strict guarantee).
+    /// `u32` accommodates up to ~4 PiB — plenty of headroom for
+    /// any realistic ISO.
+    pub size_mib: u32,
+    /// HTTPS URL of the ISO body.
+    pub iso_url: String,
+    /// HTTPS URL of the upstream SHA256SUMS file.
+    pub sha256_url: String,
+    /// HTTPS URL of the detached signature over the SHA256SUMS file
+    /// (typically a GPG `.gpg`).
+    pub sig_url: String,
+    /// Secure Boot status string — one of `"signed:<vendor>"` (e.g.
+    /// `"signed:canonical"`), `"unsigned-needs-mok"`, or
+    /// `"unknown"`.
+    pub sb: String,
+    /// One-line operator-facing purpose (e.g. `"Standard server
+    /// install media"`).
+    pub purpose: String,
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1282,5 +1385,91 @@ mod tests {
         let body = serde_json::to_string(&err).expect("serialize");
         assert!(body.contains("\"error\""));
         assert!(!body.contains("\"sha256\""), "{body}");
+    }
+
+    fn sample_recommend_entry() -> RecommendEntry {
+        RecommendEntry {
+            slug: "ubuntu-24.04-live-server".to_string(),
+            name: "Ubuntu 24.04 LTS Live Server".to_string(),
+            arch: "amd64".to_string(),
+            size_mib: 2_400_u32,
+            iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso"
+                .to_string(),
+            sha256_url: "https://releases.ubuntu.com/24.04/SHA256SUMS".to_string(),
+            sig_url: "https://releases.ubuntu.com/24.04/SHA256SUMS.gpg".to_string(),
+            sb: "signed:canonical".to_string(),
+            purpose: "Standard server install media".to_string(),
+        }
+    }
+
+    #[test]
+    fn recommend_schema_version_is_one() {
+        assert_eq!(RECOMMEND_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn recommend_catalog_round_trips() {
+        let report = RecommendReport::Catalog(RecommendCatalogReport {
+            schema_version: RECOMMEND_SCHEMA_VERSION,
+            tool_version: "0.14.1".to_string(),
+            count: 1,
+            entries: vec![sample_recommend_entry()],
+        });
+        let body = serde_json::to_string(&report).expect("serialize");
+        let parsed: RecommendReport = serde_json::from_str(&body).expect("parse");
+        assert_eq!(report, parsed);
+        assert!(body.contains("\"entries\""));
+        assert!(!body.contains("\"entry\""));
+        assert!(!body.contains("\"error\""));
+    }
+
+    #[test]
+    fn recommend_single_round_trips() {
+        let report = RecommendReport::Single(RecommendSingleReport {
+            schema_version: RECOMMEND_SCHEMA_VERSION,
+            tool_version: "0.14.1".to_string(),
+            entry: sample_recommend_entry(),
+        });
+        let body = serde_json::to_string(&report).expect("serialize");
+        let parsed: RecommendReport = serde_json::from_str(&body).expect("parse");
+        assert_eq!(report, parsed);
+        assert!(body.contains("\"entry\""));
+        assert!(!body.contains("\"entries\""));
+        assert!(!body.contains("\"error\""));
+    }
+
+    #[test]
+    fn recommend_miss_round_trips_and_omits_tool_version() {
+        // The miss envelope intentionally does NOT carry
+        // tool_version — that's the existing wire-format asymmetry
+        // we're preserving. Phase 4b-6 keeps this.
+        let report = RecommendReport::Miss(RecommendMissReport {
+            schema_version: RECOMMEND_SCHEMA_VERSION,
+            error: "no catalog entry matching 'x'".to_string(),
+        });
+        let body = serde_json::to_string(&report).expect("serialize");
+        let parsed: RecommendReport = serde_json::from_str(&body).expect("parse");
+        assert_eq!(report, parsed);
+        assert!(body.contains("\"error\""));
+        assert!(
+            !body.contains("\"tool_version\""),
+            "miss omits tool_version: {body}"
+        );
+    }
+
+    #[test]
+    fn recommend_untagged_dispatch_by_field_presence() {
+        // Serde-untagged distinguishes the three variants by the
+        // presence of their signature fields (entries / entry /
+        // error). This test pins that an out-of-band parser that
+        // dispatches on field presence can recover the right
+        // variant from bytes alone.
+        let catalog_body = r#"{"schema_version":1,"tool_version":"0.1.0","count":0,"entries":[]}"#;
+        let parsed: RecommendReport = serde_json::from_str(catalog_body).expect("catalog parse");
+        assert!(matches!(parsed, RecommendReport::Catalog(_)));
+
+        let miss_body = r#"{"schema_version":1,"error":"not found"}"#;
+        let parsed: RecommendReport = serde_json::from_str(miss_body).expect("miss parse");
+        assert!(matches!(parsed, RecommendReport::Miss(_)));
     }
 }
