@@ -260,6 +260,20 @@ pub fn record_flash(drive: &Drive, img_path: &Path, img_size: u64) -> Result<Pat
     Ok(dest)
 }
 
+/// Emit a pre-dispatch error as `aegis_manifest::CliError` on
+/// stdout. Used when an attest subcommand fails before it can
+/// produce its subcommand-specific `--json` envelope.
+fn emit_cli_error(msg: &str) {
+    let envelope = aegis_manifest::CliError {
+        schema_version: aegis_manifest::CLI_ERROR_SCHEMA_VERSION,
+        error: msg.to_string(),
+    };
+    match serde_json::to_string_pretty(&envelope) {
+        Ok(body) => println!("{body}"),
+        Err(err) => eprintln!("aegis-boot attest: serialize error envelope: {err}"),
+    }
+}
+
 /// Entry point for `aegis-boot attest [list|show <file>] [--help]`.
 pub fn run(args: &[String]) -> ExitCode {
     let sub = args.first().map(String::as_str);
@@ -319,10 +333,7 @@ fn run_list(json_mode: bool) -> ExitCode {
             .collect(),
         Err(e) => {
             if json_mode {
-                println!(
-                    "{{ \"schema_version\": 1, \"error\": \"{}\" }}",
-                    crate::doctor::json_escape(&format!("read_dir {}: {e}", dir.display()))
-                );
+                emit_cli_error(&format!("read_dir {}: {e}", dir.display()));
             } else {
                 eprintln!("aegis-boot attest list: read_dir {}: {e}", dir.display());
             }
@@ -426,10 +437,7 @@ fn run_show(args: &[String]) -> ExitCode {
         Ok(a) => a,
         Err(e) => {
             if json_mode {
-                println!(
-                    "{{ \"schema_version\": 1, \"error\": \"{}\" }}",
-                    crate::doctor::json_escape(&e)
-                );
+                emit_cli_error(&e);
             } else {
                 eprintln!("aegis-boot attest show: {e}");
             }
@@ -452,10 +460,7 @@ fn run_show(args: &[String]) -> ExitCode {
                 }
             }
             Err(e) => {
-                println!(
-                    "{{ \"schema_version\": 1, \"error\": \"read {}: {e}\" }}",
-                    crate::doctor::json_escape(&path.display().to_string())
-                );
+                emit_cli_error(&format!("read {}: {e}", path.display()));
                 return ExitCode::from(1);
             }
         }

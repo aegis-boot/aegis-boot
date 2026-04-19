@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CliError",
+  "description": "Generic error envelope emitted when a subcommand fails before it can produce its subcommand-specific `--json` envelope. Examples: `aegis-boot list --json` before mount-resolution succeeds; `aegis-boot verify --json` before a stick is found.\n\nKept deliberately minimal (just `schema_version` + `error`) so scripted consumers can parse it without knowing which subcommand was called. Shared across subcommands because the pre-dispatch failure path is semantically identical.",
+  "type": "object",
+  "required": [
+    "error",
+    "schema_version"
+  ],
+  "properties": {
+    "error": {
+      "description": "Human-readable error message.",
+      "type": "string"
+    },
+    "schema_version": {
+      "description": "Wire-format version. See [`CLI_ERROR_SCHEMA_VERSION`].",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  }
+}

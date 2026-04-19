@@ -37,6 +37,9 @@
 //! * [`aegis_manifest::DoctorReport`] →
 //!   `docs/reference/schemas/aegis-boot-doctor.schema.json`
 //!   (Phase 4b-8 of [#286])
+//! * [`aegis_manifest::CliError`] →
+//!   `docs/reference/schemas/aegis-boot-cli-error.schema.json`
+//!   (#306 — generic pre-dispatch error envelope)
 //!
 //! CI's `manifest-schema-drift` job runs this in `--check` mode on
 //! every PR. Any time a field is added, removed, or retyped on any
@@ -63,8 +66,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use aegis_manifest::{
-    AttestListReport, Attestation, CompatReport, CompatSubmitReport, DoctorReport, ListReport,
-    Manifest, RecommendReport, UpdateReport, VerifyReport, Version,
+    AttestListReport, Attestation, CliError, CompatReport, CompatSubmitReport, DoctorReport,
+    ListReport, Manifest, RecommendReport, UpdateReport, VerifyReport, Version,
 };
 use schemars::schema_for;
 
@@ -133,6 +136,11 @@ fn targets() -> Vec<Target> {
             relative_path: "docs/reference/schemas/aegis-boot-doctor.schema.json",
             render: render_doctor_schema,
         },
+        Target {
+            name: "CliError",
+            relative_path: "docs/reference/schemas/aegis-boot-cli-error.schema.json",
+            render: render_cli_error_schema,
+        },
     ]
 }
 
@@ -178,6 +186,10 @@ fn render_compat_submit_schema() -> Result<String, String> {
 
 fn render_doctor_schema() -> Result<String, String> {
     render_pretty(&schema_for!(DoctorReport))
+}
+
+fn render_cli_error_schema() -> Result<String, String> {
+    render_pretty(&schema_for!(CliError))
 }
 
 /// Serialize a JSON Schema as pretty-printed JSON with a trailing
