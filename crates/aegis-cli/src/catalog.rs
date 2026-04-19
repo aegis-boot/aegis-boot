@@ -214,70 +214,76 @@ pub fn run(args: &[String]) -> ExitCode {
 }
 
 /// `aegis-boot recommend --json [slug]` — emit catalog entries as
-/// structured JSON. No slug → full catalog (count + array); one slug
-/// → single-entry envelope with the same entry shape. Stable schema
-/// so downstream tooling can drive `aegis-boot fetch` from the output.
+/// structured JSON via the typed [`aegis_manifest::RecommendReport`]
+/// envelope. Phase 4b-6 of #286 migrated this from hand-rolled
+/// `println!()` chains. Wire contract pinned by
+/// `docs/reference/schemas/aegis-boot-recommend.schema.json`.
 fn run_json(slug: Option<&str>) -> ExitCode {
-    use crate::doctor::json_escape;
     match slug {
         None => {
-            println!("{{");
-            println!("  \"schema_version\": 1,");
-            println!("  \"tool_version\": \"{}\",", env!("CARGO_PKG_VERSION"));
-            println!("  \"count\": {},", CATALOG.len());
-            println!("  \"entries\": [");
-            let last = CATALOG.len().saturating_sub(1);
-            for (i, entry) in CATALOG.iter().enumerate() {
-                let comma = if i == last { "" } else { "," };
-                emit_entry_json(entry, "    ", comma);
-            }
-            println!("  ]");
-            println!("}}");
+            let entries: Vec<aegis_manifest::RecommendEntry> =
+                CATALOG.iter().map(entry_to_recommend).collect();
+            let report =
+                aegis_manifest::RecommendReport::Catalog(aegis_manifest::RecommendCatalogReport {
+                    schema_version: aegis_manifest::RECOMMEND_SCHEMA_VERSION,
+                    tool_version: env!("CARGO_PKG_VERSION").to_string(),
+                    count: u32::try_from(entries.len()).unwrap_or(u32::MAX),
+                    entries,
+                });
+            emit_recommend_report(&report);
             ExitCode::SUCCESS
         }
         Some(slug) => {
             let Some(entry) = find_entry(slug) else {
-                println!(
-                    "{{ \"schema_version\": 1, \"error\": \"{}\" }}",
-                    json_escape(&format!("no catalog entry matching '{slug}'"))
-                );
+                let report =
+                    aegis_manifest::RecommendReport::Miss(aegis_manifest::RecommendMissReport {
+                        schema_version: aegis_manifest::RECOMMEND_SCHEMA_VERSION,
+                        error: format!("no catalog entry matching '{slug}'"),
+                    });
+                emit_recommend_report(&report);
                 return ExitCode::from(1);
             };
-            println!("{{");
-            println!("  \"schema_version\": 1,");
-            println!("  \"tool_version\": \"{}\",", env!("CARGO_PKG_VERSION"));
-            println!("  \"entry\":");
-            emit_entry_json(entry, "  ", "");
-            println!("}}");
+            let report =
+                aegis_manifest::RecommendReport::Single(aegis_manifest::RecommendSingleReport {
+                    schema_version: aegis_manifest::RECOMMEND_SCHEMA_VERSION,
+                    tool_version: env!("CARGO_PKG_VERSION").to_string(),
+                    entry: entry_to_recommend(entry),
+                });
+            emit_recommend_report(&report);
             ExitCode::SUCCESS
         }
     }
 }
 
-/// Emit one catalog Entry as a JSON object. `indent` is the leading
-/// whitespace for the opening brace; `comma` is appended after the
-/// closing brace (empty string for the last item in an array).
-fn emit_entry_json(entry: &Entry, indent: &str, comma: &str) {
-    use crate::doctor::json_escape;
+fn emit_recommend_report(report: &aegis_manifest::RecommendReport) {
+    match serde_json::to_string_pretty(report) {
+        Ok(body) => println!("{body}"),
+        Err(e) => eprintln!("aegis-boot recommend: failed to serialize --json envelope: {e}"),
+    }
+}
+
+/// Map the local `Entry` struct onto the wire-format
+/// [`aegis_manifest::RecommendEntry`]. Local type uses `SbStatus`
+/// enum; wire format flattens to a string via the existing
+/// `"signed:<vendor>"` / `"unsigned-needs-mok"` / `"unknown"`
+/// convention.
+fn entry_to_recommend(entry: &Entry) -> aegis_manifest::RecommendEntry {
     let sb = match entry.sb {
         SbStatus::Signed(vendor) => format!("signed:{vendor}"),
         SbStatus::UnsignedNeedsMok => "unsigned-needs-mok".to_string(),
         SbStatus::Unknown => "unknown".to_string(),
     };
-    println!("{indent}{{");
-    println!("{indent}  \"slug\": \"{}\",", json_escape(entry.slug));
-    println!("{indent}  \"name\": \"{}\",", json_escape(entry.name));
-    println!("{indent}  \"arch\": \"{}\",", json_escape(entry.arch));
-    println!("{indent}  \"size_mib\": {},", entry.size_mib);
-    println!("{indent}  \"iso_url\": \"{}\",", json_escape(entry.iso_url));
-    println!(
-        "{indent}  \"sha256_url\": \"{}\",",
-        json_escape(entry.sha256_url)
-    );
-    println!("{indent}  \"sig_url\": \"{}\",", json_escape(entry.sig_url));
-    println!("{indent}  \"sb\": \"{}\",", json_escape(&sb));
-    println!("{indent}  \"purpose\": \"{}\"", json_escape(entry.purpose));
-    println!("{indent}}}{comma}");
+    aegis_manifest::RecommendEntry {
+        slug: entry.slug.to_string(),
+        name: entry.name.to_string(),
+        arch: entry.arch.to_string(),
+        size_mib: entry.size_mib,
+        iso_url: entry.iso_url.to_string(),
+        sha256_url: entry.sha256_url.to_string(),
+        sig_url: entry.sig_url.to_string(),
+        sb,
+        purpose: entry.purpose.to_string(),
+    }
 }
 
 fn print_help() {
