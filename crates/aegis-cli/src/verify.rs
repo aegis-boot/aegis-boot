@@ -146,102 +146,92 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
 /// Empty-stick JSON envelope. Stable `schema_version=1`; every field
 /// is present (even if 0 or empty array) so a downstream consumer can
 /// parse without conditionals.
+///
+/// Phase 4b-4 of #286 migrated this + [`print_verify_json`] from
+/// hand-rolled `println!()` chains to the typed
+/// [`aegis_manifest::VerifyReport`] envelope. Wire contract pinned
+/// via `docs/reference/schemas/aegis-boot-verify.schema.json`.
 fn print_verify_json_empty(mount_path: &std::path::Path) {
-    use crate::doctor::json_escape;
-    println!("{{");
-    println!("  \"schema_version\": 1,");
-    println!("  \"tool_version\": \"{}\",", env!("CARGO_PKG_VERSION"));
-    println!(
-        "  \"mount_path\": \"{}\",",
-        json_escape(&mount_path.display().to_string())
-    );
-    println!("  \"summary\": {{");
-    println!("    \"total\": 0, \"verified\": 0, \"mismatch\": 0,");
-    println!("    \"unreadable\": 0, \"not_present\": 0,");
-    println!("    \"any_failure\": false");
-    println!("  }},");
-    println!("  \"isos\": []");
-    println!("}}");
+    let report = aegis_manifest::VerifyReport {
+        schema_version: aegis_manifest::VERIFY_SCHEMA_VERSION,
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        mount_path: mount_path.display().to_string(),
+        summary: aegis_manifest::VerifySummary {
+            total: 0,
+            verified: 0,
+            mismatch: 0,
+            unreadable: 0,
+            not_present: 0,
+            any_failure: false,
+        },
+        isos: Vec::new(),
+    };
+    emit_verify_report(&report);
 }
 
 /// Populated-stick JSON envelope. Schema matches `print_verify_json_empty`
-/// with a non-empty `isos` array. Each entry carries the verdict plus
-/// the variant-specific fields (digest, actual/expected, reason).
+/// with a non-empty `isos` array.
 fn print_verify_json(
     mount_path: &std::path::Path,
     verdicts: &[(String, HashVerification)],
     tally: &Tally,
 ) {
-    use crate::doctor::json_escape;
-    println!("{{");
-    println!("  \"schema_version\": 1,");
-    println!("  \"tool_version\": \"{}\",", env!("CARGO_PKG_VERSION"));
-    println!(
-        "  \"mount_path\": \"{}\",",
-        json_escape(&mount_path.display().to_string())
-    );
-    println!("  \"summary\": {{");
-    println!("    \"total\": {},", tally.total());
-    println!("    \"verified\": {},", tally.verified);
-    println!("    \"mismatch\": {},", tally.mismatch);
-    println!("    \"unreadable\": {},", tally.unreadable);
-    println!("    \"not_present\": {},", tally.not_present);
-    println!(
-        "    \"any_failure\": {}",
-        if tally.any_failure() { "true" } else { "false" }
-    );
-    println!("  }},");
-    println!("  \"isos\": [");
-    let last = verdicts.len().saturating_sub(1);
-    for (i, (name, verdict)) in verdicts.iter().enumerate() {
-        let comma = if i == last { "" } else { "," };
-        emit_verdict_json(name, verdict, comma);
-    }
-    println!("  ]");
-    println!("}}");
+    let report = aegis_manifest::VerifyReport {
+        schema_version: aegis_manifest::VERIFY_SCHEMA_VERSION,
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        mount_path: mount_path.display().to_string(),
+        summary: aegis_manifest::VerifySummary {
+            total: u32::try_from(tally.total()).unwrap_or(u32::MAX),
+            verified: u32::try_from(tally.verified).unwrap_or(u32::MAX),
+            mismatch: u32::try_from(tally.mismatch).unwrap_or(u32::MAX),
+            unreadable: u32::try_from(tally.unreadable).unwrap_or(u32::MAX),
+            not_present: u32::try_from(tally.not_present).unwrap_or(u32::MAX),
+            any_failure: tally.any_failure(),
+        },
+        isos: verdicts
+            .iter()
+            .map(|(name, v)| aegis_manifest::VerifyEntry {
+                name: name.clone(),
+                verdict: convert_verdict(v),
+            })
+            .collect(),
+    };
+    emit_verify_report(&report);
 }
 
-/// Emit one ISO's verdict as a JSON object. Variant-specific fields
-/// match the in-memory `HashVerification` enum so the parser can
-/// dispatch on `verdict` and expect the right supporting fields.
-fn emit_verdict_json(name: &str, verdict: &HashVerification, comma: &str) {
-    use crate::doctor::json_escape;
-    match verdict {
-        HashVerification::Verified { digest, source } => {
-            println!(
-                "    {{ \"name\": \"{}\", \"verdict\": \"Verified\", \"digest\": \"{}\", \"source\": \"{}\" }}{comma}",
-                json_escape(name),
-                json_escape(digest),
-                json_escape(source),
-            );
-        }
+fn emit_verify_report(report: &aegis_manifest::VerifyReport) {
+    match serde_json::to_string_pretty(report) {
+        Ok(body) => println!("{body}"),
+        Err(e) => eprintln!("aegis-boot verify: failed to serialize --json envelope: {e}"),
+    }
+}
+
+/// Map the local [`HashVerification`] enum (from iso-probe) onto the
+/// wire-format [`aegis_manifest::VerifyVerdict`] enum. Both have the
+/// same 4 variants with the same fields, so this is a pure
+/// structural translation.
+fn convert_verdict(v: &HashVerification) -> aegis_manifest::VerifyVerdict {
+    match v {
+        HashVerification::Verified { digest, source } => aegis_manifest::VerifyVerdict::Verified {
+            digest: digest.clone(),
+            source: source.clone(),
+        },
         HashVerification::Mismatch {
             actual,
             expected,
             source,
-        } => {
-            println!(
-                "    {{ \"name\": \"{}\", \"verdict\": \"Mismatch\", \"actual\": \"{}\", \"expected\": \"{}\", \"source\": \"{}\" }}{comma}",
-                json_escape(name),
-                json_escape(actual),
-                json_escape(expected),
-                json_escape(source),
-            );
-        }
+        } => aegis_manifest::VerifyVerdict::Mismatch {
+            actual: actual.clone(),
+            expected: expected.clone(),
+            source: source.clone(),
+        },
         HashVerification::Unreadable { source, reason } => {
-            println!(
-                "    {{ \"name\": \"{}\", \"verdict\": \"Unreadable\", \"source\": \"{}\", \"reason\": \"{}\" }}{comma}",
-                json_escape(name),
-                json_escape(source),
-                json_escape(reason),
-            );
+            aegis_manifest::VerifyVerdict::Unreadable {
+                source: source.clone(),
+                reason: reason.clone(),
+            }
         }
-        HashVerification::NotPresent => {
-            println!(
-                "    {{ \"name\": \"{}\", \"verdict\": \"NotPresent\" }}{comma}",
-                json_escape(name),
-            );
-        }
+        HashVerification::NotPresent => aegis_manifest::VerifyVerdict::NotPresent,
     }
 }
 

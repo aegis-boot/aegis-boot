@@ -1,0 +1,204 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VerifyReport",
+  "description": "Envelope emitted by `aegis-boot verify --json`. Re-verifies every ISO on a stick against its sidecar checksum and reports a per-ISO verdict plus a summary tally. Used by CI / monitoring to audit that a stick's ISOs haven't bit-rotted, been replaced, or lost their sha256 sidecars.",
+  "type": "object",
+  "required": [
+    "isos",
+    "mount_path",
+    "schema_version",
+    "summary",
+    "tool_version"
+  ],
+  "properties": {
+    "isos": {
+      "description": "Per-ISO verdict. Always present (even as `[]` for an empty stick) so consumers see a stable field set.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/VerifyEntry"
+      }
+    },
+    "mount_path": {
+      "description": "Filesystem mount path of the AEGIS_ISOS partition scanned.",
+      "type": "string"
+    },
+    "schema_version": {
+      "description": "Wire-format version. See [`VERIFY_SCHEMA_VERSION`].",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "summary": {
+      "description": "Aggregate tally + overall pass/fail.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/VerifySummary"
+        }
+      ]
+    },
+    "tool_version": {
+      "description": "`aegis-boot` binary version that produced this envelope.",
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "VerifyEntry": {
+      "description": "One ISO's verdict inside a [`VerifyReport`]. The `verdict` field is the discriminator; variant-specific fields follow via `#[serde(flatten)]`. Consumer contract: branch on `verdict`, expect the fields documented for that variant.\n\nWire shape examples:\n\n```text {\"name\": \"ubuntu.iso\", \"verdict\": \"Verified\", \"digest\": \"…\", \"source\": \"sidecar\"} {\"name\": \"debian.iso\", \"verdict\": \"Mismatch\", \"actual\": \"…\", \"expected\": \"…\", \"source\": \"sidecar\"} {\"name\": \"alpine.iso\", \"verdict\": \"Unreadable\", \"source\": \"sidecar\", \"reason\": \"permission denied\"} {\"name\": \"fedora.iso\", \"verdict\": \"NotPresent\"} ```",
+      "type": "object",
+      "oneOf": [
+        {
+          "description": "sha256 of the ISO matches the sidecar's recorded digest.",
+          "type": "object",
+          "required": [
+            "digest",
+            "source",
+            "verdict"
+          ],
+          "properties": {
+            "digest": {
+              "description": "Computed sha256 (lowercase hex).",
+              "type": "string"
+            },
+            "source": {
+              "description": "Where the expected digest came from (e.g. `\"sidecar\"` for the on-partition `.sha256` file).",
+              "type": "string"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "Verified"
+              ]
+            }
+          }
+        },
+        {
+          "description": "sha256 of the ISO does NOT match the sidecar — either media corruption or a replaced/tampered file. Trust-chain breaking.",
+          "type": "object",
+          "required": [
+            "actual",
+            "expected",
+            "source",
+            "verdict"
+          ],
+          "properties": {
+            "actual": {
+              "description": "Computed sha256 of the ISO on disk.",
+              "type": "string"
+            },
+            "expected": {
+              "description": "Digest the sidecar asserts.",
+              "type": "string"
+            },
+            "source": {
+              "description": "Where the expected digest came from.",
+              "type": "string"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "Mismatch"
+              ]
+            }
+          }
+        },
+        {
+          "description": "The ISO file exists but couldn't be opened / hashed.",
+          "type": "object",
+          "required": [
+            "reason",
+            "source",
+            "verdict"
+          ],
+          "properties": {
+            "reason": {
+              "description": "Human-readable explanation (permission, I/O error).",
+              "type": "string"
+            },
+            "source": {
+              "description": "Where the expected digest came from (so the operator knows which sidecar to reconcile against after restoring access to the file).",
+              "type": "string"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "Unreadable"
+              ]
+            }
+          }
+        },
+        {
+          "description": "An ISO referenced elsewhere (e.g. in the attestation manifest's `isos` list) is not on the partition.",
+          "type": "object",
+          "required": [
+            "verdict"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "NotPresent"
+              ]
+            }
+          }
+        }
+      ],
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "description": "ISO filename.",
+          "type": "string"
+        }
+      }
+    },
+    "VerifySummary": {
+      "description": "Tally of per-ISO verdicts in a [`VerifyReport`]. `any_failure` is the summary bit downstream tooling (CI, dashboards) branches on.",
+      "type": "object",
+      "required": [
+        "any_failure",
+        "mismatch",
+        "not_present",
+        "total",
+        "unreadable",
+        "verified"
+      ],
+      "properties": {
+        "any_failure": {
+          "description": "True iff at least one of `mismatch`, `unreadable`, or `not_present` is non-zero. The overall stick-health bit.",
+          "type": "boolean"
+        },
+        "mismatch": {
+          "description": "Count with `verdict: \"Mismatch\"` — sha256 differed from sidecar. A serious trust-chain signal; consumer should surface aggressively.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "not_present": {
+          "description": "Count with `verdict: \"NotPresent\"` — referenced in an attestation manifest but missing from the partition.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "total": {
+          "description": "Total ISOs scanned. Equals the length of [`VerifyReport::isos`].",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "unreadable": {
+          "description": "Count with `verdict: \"Unreadable\"` — file exists but couldn't be opened / read (permission, bad media).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "verified": {
+          "description": "Count with `verdict: \"Verified\"`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    }
+  }
+}
