@@ -55,7 +55,7 @@ Install the operator CLI:
 | Platform | Status |
 |---|---|
 | Linux x86_64 | Full support — flash + build, add ISOs, kexec, attest, doctor, compat |
-| macOS (Apple Silicon + Intel) | Drive detection + `flash --image PATH` ([#229](https://github.com/williamzujkowski/aegis-boot/pull/229)). Image *building* requires Linux (mkusb.sh deps); use `aegis-boot fetch-image --url ... --sha256 ...` ([#232](https://github.com/williamzujkowski/aegis-boot/pull/232)) to pull a pre-built `.img` then pipe to `flash --image $(...)` |
+| macOS (Apple Silicon + Intel) | Drive detection + `flash --image PATH` ([#229](https://github.com/williamzujkowski/aegis-boot/pull/229)). Image *building* requires Linux (mkusb.sh deps); use `aegis-boot fetch-image` (zero-arg, auto-resolves to latest release + cosign-verifies the signed `.img` — [#235](https://github.com/williamzujkowski/aegis-boot/issues/235)) then pipe to `flash --image $(...)` |
 | Windows | Drive enumeration via `Get-Disk` ([#230](https://github.com/williamzujkowski/aegis-boot/pull/230)). Raw-disk writing deferred — combine `aegis-boot list` with Rufus or `dd-for-Windows` for the write |
 
 Pre-built binaries below are Linux-only today; macOS/Windows users build with `cargo install --path crates/aegis-cli` until a darwin/windows release artifact ships.
