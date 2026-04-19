@@ -559,14 +559,29 @@ fn draw_empty_list(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     lines.push(Line::from(
         "     boot this stick on a host and run `aegis-boot doctor --stick /dev/sdX`.",
     ));
+    // Phase 2 of #312: empty-state previously said "select the rescue
+    // shell entry below (if enabled)", but `draw_empty_list` replaces
+    // the list entirely — there IS no "below" from the operator's
+    // view. Point directly at the Enter keybinding since that's what
+    // actually dispatches to rescue shell in this state (only entry
+    // in the synthetic view is `ViewEntry::RescueShell`).
     lines.push(Line::from(
-        "  3. Select the always-present rescue shell entry below (if enabled) to",
+        "  3. Press Enter now to drop to a busybox rescue shell and mount /",
     ));
     lines.push(Line::from(
-        "     drop to a busybox prompt and mount/inspect filesystems by hand.",
+        "     inspect filesystems by hand — the synthetic \"rescue shell\" entry is",
+    ));
+    lines.push(Line::from(
+        "     pre-selected in the background list even when no ISOs were found.",
     ));
     lines.push(Line::from(""));
-    lines.push(Line::from("Press q to reboot, ? for keybindings."));
+    // Highlight the three bindings that actually do something useful
+    // on this screen (Enter → rescue shell, q → reboot, ? → keybindings
+    // overlay). #312.
+    lines.push(Line::from(Span::styled(
+        "Press Enter for rescue shell · q to reboot · ? for keybindings.",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
 
     let panel = Paragraph::new(lines)
         .block(
@@ -1214,6 +1229,35 @@ mod tests {
         assert!(
             s.contains("rescue shell"),
             "missing rescue-shell escape-hatch mention in: {s}",
+        );
+    }
+
+    #[test]
+    fn empty_list_footer_names_enter_rescue_shell_keybinding() {
+        // #312 — the empty-state footer must tell the operator how
+        // to drop to the rescue shell RIGHT NOW (not reference a
+        // "rescue shell entry below", which doesn't render in this
+        // screen). Enter is the dispatch key; this test pins that
+        // hint into the visible output.
+        let state = AppState::new(vec![]);
+        let s = render_to_string(&state);
+        assert!(
+            s.contains("Press Enter for rescue shell"),
+            "empty-state footer must name the Enter → rescue shell keybinding: {s}"
+        );
+    }
+
+    #[test]
+    fn empty_list_does_not_reference_unseen_entry_below() {
+        // #312 regression guard — the pre-fix text said "select the
+        // rescue shell entry below", but `draw_empty_list` replaces
+        // the list entirely so there IS no "below" from the
+        // operator's POV. Ensure the new text doesn't leak back in.
+        let state = AppState::new(vec![]);
+        let s = render_to_string(&state);
+        assert!(
+            !s.contains("entry below"),
+            "empty-state must not reference an unseen 'entry below': {s}"
         );
     }
 
