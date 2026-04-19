@@ -11,12 +11,31 @@
 //! aegis-boot flash --image "$img" /dev/disk5
 //! ```
 //!
-//! Verification today is sha256 only — pass `--sha256 HASH` to require
-//! the bytes match. Cosign signature verification is a follow-up
-//! (requires release.yml to publish .sig + .pem alongside .img).
+//! Verification has two layers:
+//!
+//!   1. **sha256** (`--sha256 HASH`) — required-if-provided; mismatch
+//!      deletes the file + exits 1. When omitted, a WARNING surfaces
+//!      the computed hash so the operator can pin it for next time.
+//!   2. **cosign keyless** (auto-enabled, hardcoded identity bound to
+//!      aegis-boot's own `release.yml`) — downloads `<URL>.sig` +
+//!      `<URL>.pem` from the same origin as the image, then shells out
+//!      to `cosign verify-blob`. **Graceful-degrades** when the `.sig`
+//!      / `.pem` aren't published (curl 404): surfaces a warning and
+//!      proceeds on the sha256 contract alone. `--no-cosign` skips
+//!      the attempt entirely for air-gapped / offline contexts where
+//!      the Sigstore transparency-log lookup would fail anyway.
+//!
+//! Why auto-enabled with graceful-degrade (2026-04-18 decision on #235):
+//! best practice is "verify when possible, don't fail-closed on old /
+//! fork / test-release URLs that never published signatures." Operators
+//! who need strict verification can watch for the "cosign sig ✓" line
+//! in the progress output, or grep the `--json` envelope once that
+//! surface ships.
 //!
 //! Subprocess use: shells out to `curl` (already a host dep used by
-//! install.sh + other subcommands). No new crate dependencies.
+//! install.sh + other subcommands) and to `cosign` (added as an
+//! operator-host dep; `aegis-boot doctor` now reports cosign presence).
+//! No new crate dependencies.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -98,7 +117,189 @@ fn try_run(args: &[String]) -> Result<PathBuf, u8> {
         eprintln!("  Re-run with --sha256 {got} to pin this image for future fetches.");
     }
 
+    // Cosign keyless verification (#235) — auto-enabled with
+    // graceful-degrade on missing signatures. The operator can bypass
+    // with --no-cosign for offline / air-gapped scenarios where the
+    // Sigstore transparency-log lookup would fail anyway.
+    if parsed.cosign_disabled {
+        eprintln!("aegis-boot fetch-image: cosign verification skipped (--no-cosign)");
+    } else {
+        try_cosign_verify(&url, &out_path);
+    }
+
     Ok(out_path)
+}
+
+/// Attempt to download `<url>.sig` + `<url>.pem` and run
+/// `cosign verify-blob` against them. On verification **success**,
+/// emit a confirmation line and return. On the following conditions,
+/// surface a WARNING and proceed (graceful degrade — the sha256 layer
+/// is still active, if supplied):
+///
+///   * `cosign` not on PATH — operator host lacks the binary
+///   * curl fails to download `.sig` or `.pem` — typically HTTP 404
+///     when the release pre-dates signature publishing
+///
+/// On verification **failure** (signatures present but don't match the
+/// hardcoded identity or the image bytes), the image is deleted and
+/// we return early — same fail-closed contract as the sha256-mismatch
+/// path. The `out_path` argument is kept by reference because we want
+/// to be able to unlink it on mismatch.
+fn try_cosign_verify(url: &str, image_path: &Path) {
+    if !cosign_on_path() {
+        eprintln!(
+            "aegis-boot fetch-image: WARNING — cosign not on PATH; skipping signature \
+             verification. Install cosign (https://docs.sigstore.dev/cosign/installation/) \
+             or pass --no-cosign to silence this warning."
+        );
+        return;
+    }
+
+    // Stage .sig + .pem into the same directory as the image so a
+    // future rerun that re-downloads the image also overwrites stale
+    // signature files. Keep the files (don't delete on success) so
+    // operators can re-verify offline later if desired.
+    let sig_path = sibling_with_suffix(image_path, ".sig");
+    let pem_path = sibling_with_suffix(image_path, ".pem");
+
+    let sig_url = format!("{url}.sig");
+    let pem_url = format!("{url}.pem");
+
+    if !try_download_signature(&sig_url, &sig_path, ".sig") {
+        return;
+    }
+    if !try_download_signature(&pem_url, &pem_path, ".pem") {
+        return;
+    }
+
+    match run_cosign_verify_blob(image_path, &sig_path, &pem_path) {
+        Ok(()) => {
+            eprintln!("aegis-boot fetch-image: cosign keyless signature verified ✓");
+            eprintln!("  identity: {COSIGN_IDENTITY_REGEX}\n  issuer:   {COSIGN_OIDC_ISSUER}");
+        }
+        Err(reason) => {
+            eprintln!(
+                "aegis-boot fetch-image: cosign verification FAILED — {reason}\n  \
+                 The downloaded bytes could not be cryptographically attributed to \
+                 aegis-boot's release workflow. Deleting the file."
+            );
+            let _ = std::fs::remove_file(image_path);
+            let _ = std::fs::remove_file(&sig_path);
+            let _ = std::fs::remove_file(&pem_path);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Try downloading a signature-sidecar file. Returns `true` when the
+/// operator should proceed with cosign verification; `false` when a
+/// graceful-degrade warning has been emitted and the caller should
+/// skip verification (e.g. the sidecar isn't published for this
+/// release).
+fn try_download_signature(url: &str, out: &Path, suffix_label: &str) -> bool {
+    // Quiet curl — we surface our own messages on failure.
+    let status = Command::new("curl")
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--proto",
+            "=https",
+            "--tlsv1.2",
+            "--output",
+            &out.display().to_string(),
+            url,
+        ])
+        .status();
+    match status {
+        Ok(s) if s.success() => true,
+        Ok(_) => {
+            eprintln!(
+                "aegis-boot fetch-image: WARNING — {suffix_label} not available at {url} \
+                 (release likely pre-dates cosign signing). Skipping signature \
+                 verification; sha256 contract still applies."
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!(
+                "aegis-boot fetch-image: WARNING — cannot invoke curl to fetch {suffix_label}: {e}. \
+                 Skipping signature verification."
+            );
+            false
+        }
+    }
+}
+
+/// The cosign identity regex hardcoded for aegis-boot's own releases.
+/// Matches `release.yml` at any tag ref (`refs/tags/...`) on the
+/// upstream repository. Forks that publish their own releases with
+/// their own OIDC identity need a different CLI tool — this one is
+/// bound to `williamzujkowski/aegis-boot` by design.
+///
+/// If we're wrong about this regex shape, the worst that happens is
+/// a FAILED verification on otherwise-correct artifacts — operators
+/// see the failure, can manually re-verify with an adjusted regex,
+/// and we fix the regex in a point release.
+const COSIGN_IDENTITY_REGEX: &str = r"^https://github\.com/williamzujkowski/aegis-boot/\.github/workflows/release\.yml@refs/tags/.+$";
+
+/// The Sigstore OIDC issuer for GitHub Actions' ambient OIDC tokens.
+/// This is a stable public endpoint; hardcoding is intentional.
+const COSIGN_OIDC_ISSUER: &str = "https://token.actions.githubusercontent.com";
+
+/// Invoke `cosign verify-blob` against a detached signature + cert.
+/// Returns `Ok(())` when cosign exits 0 and the blob is attributed to
+/// our hardcoded identity; `Err(msg)` otherwise. The stderr output is
+/// captured and forwarded into the error message so operators can see
+/// exactly what cosign refused.
+fn run_cosign_verify_blob(image: &Path, sig: &Path, pem: &Path) -> Result<(), String> {
+    let output = Command::new("cosign")
+        .args([
+            "verify-blob",
+            "--signature",
+            &sig.display().to_string(),
+            "--certificate",
+            &pem.display().to_string(),
+            "--certificate-identity-regexp",
+            COSIGN_IDENTITY_REGEX,
+            "--certificate-oidc-issuer",
+            COSIGN_OIDC_ISSUER,
+            &image.display().to_string(),
+        ])
+        .output()
+        .map_err(|e| format!("cannot run cosign: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_trimmed = stderr.trim();
+    if stderr_trimmed.is_empty() {
+        Err(format!("cosign exited {}", output.status))
+    } else {
+        Err(format!("cosign exited {}: {stderr_trimmed}", output.status))
+    }
+}
+
+/// Check `cosign --version` returns 0 on the operator's PATH. Same
+/// pattern as the `sudo` / `sha256sum` presence checks in
+/// `aegis-boot doctor`. Called from both here (lazy) and from doctor
+/// (eager) so operators get the same answer either way.
+pub(crate) fn cosign_on_path() -> bool {
+    Command::new("cosign")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Append a suffix to the file path. `/tmp/a.img` + `.sig` →
+/// `/tmp/a.img.sig`. Kept as a small helper because the `Path` API
+/// doesn't have a direct "append to basename" verb.
+fn sibling_with_suffix(image: &Path, suffix: &str) -> PathBuf {
+    let mut s = image.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
 }
 
 /// Parsed argv. All options optional; --url is required at runtime.
@@ -108,6 +309,10 @@ struct ParsedArgs {
     url: Option<String>,
     out: Option<PathBuf>,
     expected_sha256: Option<String>,
+    /// When true, skip the cosign auto-verification step entirely.
+    /// Useful for air-gapped / offline contexts where the Sigstore
+    /// transparency-log lookup would fail regardless.
+    cosign_disabled: bool,
 }
 
 fn parse_args(args: &[String]) -> Result<ParsedArgs, u8> {
@@ -116,6 +321,7 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, u8> {
         url: None,
         out: None,
         expected_sha256: None,
+        cosign_disabled: false,
     };
     let mut i = 0;
     while i < args.len() {
@@ -155,6 +361,7 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, u8> {
             arg if arg.starts_with("--sha256=") => {
                 p.expected_sha256 = Some(arg["--sha256=".len()..].to_string());
             }
+            "--no-cosign" => p.cosign_disabled = true,
             arg if arg.starts_with("--") => {
                 eprintln!("aegis-boot fetch-image: unknown option '{arg}'");
                 return Err(2);
@@ -182,11 +389,18 @@ fn print_help() {
     println!("aegis-boot fetch-image — download + verify a pre-built aegis-boot image");
     println!();
     println!("USAGE:");
-    println!("  aegis-boot fetch-image --url URL [--out PATH] [--sha256 HEX]");
+    println!("  aegis-boot fetch-image --url URL [--out PATH] [--sha256 HEX] [--no-cosign]");
     println!();
     println!("  --url URL       HTTPS URL of the aegis-boot.img to download (required)");
     println!("  --out PATH      Where to write the image (default: $XDG_CACHE_HOME/aegis-boot/)");
     println!("  --sha256 HEX    Required sha256; mismatch deletes the download + exits 1");
+    println!("  --no-cosign     Skip the cosign keyless signature check (air-gap, offline)");
+    println!();
+    println!("VERIFICATION:");
+    println!("  sha256:  required-if-passed; prints computed hash when omitted");
+    println!("  cosign:  auto-attempted; downloads <URL>.sig + <URL>.pem, runs");
+    println!("           `cosign verify-blob` against aegis-boot's release-workflow OIDC");
+    println!("           identity. Graceful-degrades when signatures aren't published.");
     println!();
     println!("Composes with `flash`:");
     println!("  img=$(aegis-boot fetch-image --url ... --sha256 ...) && \\");
@@ -424,5 +638,66 @@ mod tests {
         // yields "example.com" — sanitized form is the same; that's a
         // reasonable default since there's no .img to extract.
         assert!(!basename.is_empty());
+    }
+
+    // ---- #235 PR1: cosign auto-verify plumbing --------------------------
+
+    #[test]
+    fn parse_args_accepts_no_cosign_flag() {
+        let p = parse_args(&[
+            "--url".to_string(),
+            "https://example.com/x.img".to_string(),
+            "--no-cosign".to_string(),
+        ])
+        .unwrap();
+        assert!(p.cosign_disabled);
+    }
+
+    #[test]
+    fn parse_args_default_leaves_cosign_enabled() {
+        // The operator who passes --url without touching cosign flags
+        // gets auto-verification. This is the "most automatic"
+        // contract #235 committed to.
+        let p =
+            parse_args(&["--url".to_string(), "https://example.com/x.img".to_string()]).unwrap();
+        assert!(!p.cosign_disabled);
+    }
+
+    #[test]
+    fn sibling_with_suffix_appends_to_basename() {
+        let p = sibling_with_suffix(std::path::Path::new("/tmp/aegis-boot.img"), ".sig");
+        assert_eq!(p, std::path::PathBuf::from("/tmp/aegis-boot.img.sig"));
+        let p = sibling_with_suffix(std::path::Path::new("/tmp/aegis-boot.img"), ".pem");
+        assert_eq!(p, std::path::PathBuf::from("/tmp/aegis-boot.img.pem"));
+    }
+
+    #[test]
+    fn sibling_with_suffix_handles_pathless_basename() {
+        // Defensive: the function should append even when the path
+        // has no parent directory.
+        let p = sibling_with_suffix(std::path::Path::new("x.img"), ".sig");
+        assert_eq!(p, std::path::PathBuf::from("x.img.sig"));
+    }
+
+    #[test]
+    fn cosign_identity_regex_shape_is_locked() {
+        // Regression guard: the identity regex is a security-critical
+        // constant. A drift that widens it (e.g. drops the workflow
+        // anchor) would let a non-release workflow sign artifacts that
+        // this CLI would accept. Spot-check the anchor + path shape.
+        assert!(
+            COSIGN_IDENTITY_REGEX.starts_with("^https://github\\.com/williamzujkowski/aegis-boot/")
+        );
+        assert!(COSIGN_IDENTITY_REGEX.contains(".github/workflows/release\\.yml"));
+        assert!(COSIGN_IDENTITY_REGEX.contains("refs/tags/"));
+        assert!(COSIGN_IDENTITY_REGEX.ends_with(".+$"));
+    }
+
+    #[test]
+    fn cosign_oidc_issuer_points_at_github_actions() {
+        assert_eq!(
+            COSIGN_OIDC_ISSUER,
+            "https://token.actions.githubusercontent.com"
+        );
     }
 }

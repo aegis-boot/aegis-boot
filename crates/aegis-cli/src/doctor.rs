@@ -329,6 +329,7 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
         "gpg",
         "verifies catalog SHA256SUMS signatures (`aegis-boot fetch`)",
     );
+    check_cosign_optional(&mut report);
     check_secureboot_state(&mut report);
     check_removable_drives(&mut report);
     if !json_mode {
@@ -609,6 +610,34 @@ pub(crate) fn dmi_bios_label() -> Option<String> {
         (None, Some(vi), None) => Some(vi),
         (Some(ve), None, _) => Some(ve),
         (None, None, _) => None,
+    }
+}
+
+/// Soft-check for `cosign` on PATH (#235). Unlike the hard commands
+/// above, cosign is **optional**: `fetch-image` graceful-degrades when
+/// it's missing (surfaces a warning, skips the signature layer). So
+/// this check emits `Pass` when present and `Warn` when absent, rather
+/// than `Fail` — operators who never use `fetch-image` don't need it.
+fn check_cosign_optional(report: &mut Report) {
+    let name = "command: cosign (optional)".to_string();
+    if let Some(path) = which("cosign") {
+        report.add(
+            Verdict::Pass,
+            name,
+            format!(
+                "{} (auto-verifies `aegis-boot fetch-image` downloads against aegis-boot's release workflow)",
+                path.display()
+            ),
+        );
+    } else {
+        report.add_with_next(
+            Verdict::Warn,
+            name,
+            "not found in PATH — `fetch-image` cannot cosign-verify signed images".to_string(),
+            "install cosign: https://docs.sigstore.dev/cosign/installation/ \
+             (not required unless you use `aegis-boot fetch-image`)"
+                .to_string(),
+        );
     }
 }
 
