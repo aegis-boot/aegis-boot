@@ -209,6 +209,10 @@ fn find_repo_root(start: &Path) -> Result<PathBuf, String> {
 }
 
 fn main() -> ExitCode {
+    // Devtool — args are flag names (`--write` / `--check`) only,
+    // not security keys. argv[0] is dropped via `skip(1)`. Same
+    // rationale as the main aegis-boot binary.
+    // nosemgrep: rust.lang.security.args.args
     let args: Vec<String> = env::args().skip(1).collect();
     let mode = match parse_mode(&args) {
         Ok(m) => m,

@@ -38,10 +38,20 @@
 // Keep this file dependency-free (no `use` statements, no imports)
 // so the include stays a self-contained compilation unit.
 
+// Several of these constants are consumed by Linux-only modules
+// (`direct_install`, `direct_install_manifest`) that are cfg-gated
+// out on macOS/Windows. The `#[cfg_attr(not(target_os = "linux"),
+// allow(dead_code))]` attribute silences the dead-code warning on
+// non-Linux cross-compile targets without suppressing it on the
+// primary Linux target — a genuine unused constant on Linux is still
+// a signal. The docgen bin (`--features docgen`) references them on
+// every target, but CI cross-checks don't build that feature.
+
 /// ESP partition size in megabytes. Matches `scripts/mkusb.sh`'s
 /// `ESP_SIZE_MB` default. 400 MB is enough for the signed chain
 /// (shim ~1 MB, grub ~2 MB, kernel ~15 MB, initrd ~60 MB) plus
 /// comfortable headroom for future binary growth.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) const ESP_SIZE_MB: u64 = 400;
 
 /// Default number of bytes to read back after a write (post-flash
@@ -55,10 +65,12 @@ pub(crate) const DEFAULT_READBACK_BYTES: u64 = 64 * 1024 * 1024;
 /// to parse a manifest larger than this — bounds the JSON-parser
 /// attack surface in the early-boot rescue-tui code path. 64 KiB is
 /// ~100× the expected body size so legitimate future growth has room.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 
 /// GRUB menu timeout in seconds. Short enough that an interactive
 /// user doesn't wait, long enough that an operator who wants to
 /// interrupt the default boot can do so. Matches the value baked
 /// into the rendered `grub.cfg` on the ESP.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) const GRUB_TIMEOUT_SECS: u32 = 3;
