@@ -28,14 +28,42 @@
 //! binary emits a validated JSON Schema document to
 //! `docs/reference/schemas/aegis-boot-manifest.schema.json` in the
 //! parent workspace; third-party verifiers can pin to this schema.
+//!
+//! # Two wire formats under one crate
+//!
+//! This crate hosts two logically distinct JSON wire formats that
+//! both carry aegis-boot provenance:
+//!
+//! * **On-ESP manifest** ([`Manifest`], [`SCHEMA_VERSION`]) — signed
+//!   record written into `::/aegis-boot-manifest.json` at flash time,
+//!   read by runtime verifiers. Phase 4a of [#286].
+//! * **Host attestation receipt** ([`Attestation`],
+//!   [`ATTESTATION_SCHEMA_VERSION`]) — per-flash audit record
+//!   written to `$XDG_DATA_HOME/aegis-boot/attestations/` for
+//!   chain-of-custody + fleet inventory. Phase 4c-1 of [#286].
+//!
+//! The two contracts are independently versioned — a change to one
+//! schema does not require bumping the other. They are co-located
+//! in the same crate because they are both "aegis-boot wire-format
+//! structs for third-party consumers" and sharing the optional
+//! `schema` feature + docgen infrastructure is cheaper than forking
+//! it across two crates.
+//!
+//! [#286]: https://github.com/williamzujkowski/aegis-boot/issues/286
 
 use serde::{Deserialize, Serialize};
 
-/// Locked schema version. Bump alongside a breaking shape change
-/// (removing a field, changing a field's type). Adding a new
-/// optional field is backwards-compatible and does not require a
-/// version bump — the verifier ignores fields it doesn't know about.
+/// Locked schema version for the on-ESP signed [`Manifest`]. Bump
+/// alongside a breaking shape change (removing a field, changing a
+/// field's type). Adding a new optional field is backwards-compatible
+/// and does not require a version bump — the verifier ignores fields
+/// it doesn't know about.
 pub const SCHEMA_VERSION: u32 = 1;
+
+/// Locked schema version for the host-side [`Attestation`] record.
+/// Independent of [`SCHEMA_VERSION`] — either contract can advance
+/// without the other.
+pub const ATTESTATION_SCHEMA_VERSION: u32 = 1;
 
 /// Top-level manifest body. Serialized field order matches the
 /// declaration order below — relied on for canonical JSON stability
@@ -165,6 +193,104 @@ pub struct PcrEntry {
     pub digest_hex: String,
 }
 
+// -----------------------------------------------------------------
+// Host-side attestation record (Phase 4c-1 of #286).
+//
+// The [`Attestation`] document is written to
+// `$XDG_DATA_HOME/aegis-boot/attestations/<guid>-<ts>.json` at flash
+// time, and amended with [`IsoRecord`] entries each time
+// `aegis-boot add` lands an ISO on the stick. Independent schema
+// from the on-ESP [`Manifest`] above — the attestation is audit
+// trail + fleet-inventory data, not a boot contract.
+// -----------------------------------------------------------------
+
+/// One flash + zero-or-more ISO additions, captured as a single
+/// JSON document on the host. Stored under
+/// `$XDG_DATA_HOME/aegis-boot/attestations/` (or
+/// `~/.local/share/aegis-boot/attestations/` if `XDG_DATA_HOME` is
+/// unset). The `aegis-boot attest list` / `attest show` commands
+/// read these back for chain-of-custody queries.
+///
+/// v0 ships unsigned — the trust anchor is "the operator ran this
+/// command on this host, the timestamps + hashes are the evidence."
+/// TPM PCR attestation + signing lands under epic
+/// [#139](https://github.com/williamzujkowski/aegis-boot/issues/139)
+/// as additive fields; the current schema is forward-compatible
+/// (consumers ignore unknown fields).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Attestation {
+    /// Wire-format version. See [`ATTESTATION_SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// `aegis-boot` binary version that produced this record
+    /// (e.g. `"aegis-boot 0.14.1"`).
+    pub tool_version: String,
+    /// RFC 3339 / ISO 8601 timestamp of the flash operation.
+    /// Generated via the host's `date -u +%FT%TZ` so the crate
+    /// does not pull a chrono dep.
+    pub flashed_at: String,
+    /// The user that ran `aegis-boot flash` — captured from
+    /// `$SUDO_USER` if set, else `$USER`.
+    pub operator: String,
+    /// Host environment captured at flash time.
+    pub host: HostInfo,
+    /// Target stick captured at flash time.
+    pub target: TargetInfo,
+    /// ISO records appended on each successful `aegis-boot add`.
+    /// Empty immediately after flash; grows over the stick's
+    /// lifetime.
+    pub isos: Vec<IsoRecord>,
+}
+
+/// Host environment fingerprint at flash time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct HostInfo {
+    /// `uname -r` output.
+    pub kernel: String,
+    /// Secure Boot state: one of `"enforcing"`, `"disabled"`, or
+    /// `"unknown"`.
+    pub secure_boot: String,
+}
+
+/// Target stick fingerprint at flash time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct TargetInfo {
+    /// Device node path (e.g. `/dev/sda`).
+    pub device: String,
+    /// Vendor + model string from `/sys/block/sdX/device/{vendor,model}`.
+    pub model: String,
+    /// Raw device size in bytes, rounded to the nearest 512B sector.
+    pub size_bytes: u64,
+    /// Lowercase hex sha256 of the dd'd image body.
+    pub image_sha256: String,
+    /// Size in bytes of the image body (for sanity-checking the
+    /// sha256 over the correct length).
+    pub image_size_bytes: u64,
+    /// GPT disk GUID, captured from `sgdisk -p` after `partprobe`.
+    /// May be empty if sgdisk fails or the drive isn't partitioned.
+    pub disk_guid: String,
+}
+
+/// One `aegis-boot add` operation appended to the stick's
+/// attestation record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct IsoRecord {
+    /// ISO filename as it lives on the AEGIS_ISOS data partition.
+    pub filename: String,
+    /// Lowercase hex sha256 of the ISO body.
+    pub sha256: String,
+    /// ISO size in bytes.
+    pub size_bytes: u64,
+    /// Sidecar filenames recorded alongside the ISO (e.g. a
+    /// `.aegis.toml` operator-label file).
+    pub sidecars: Vec<String>,
+    /// RFC 3339 / ISO 8601 timestamp of when the ISO was added.
+    pub added_at: String,
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -228,5 +354,60 @@ mod tests {
             !body.contains("\"sequence\":"),
             "bare `sequence` leak would break verifiers: {body}"
         );
+    }
+
+    fn sample_attestation() -> Attestation {
+        Attestation {
+            schema_version: ATTESTATION_SCHEMA_VERSION,
+            tool_version: "aegis-boot 0.14.1".to_string(),
+            flashed_at: "2026-04-19T14:30:00Z".to_string(),
+            operator: "alice".to_string(),
+            host: HostInfo {
+                kernel: "6.17.0-20-generic".to_string(),
+                secure_boot: "enforcing".to_string(),
+            },
+            target: TargetInfo {
+                device: "/dev/sda".to_string(),
+                model: "SanDisk Cruzer 32 GB".to_string(),
+                size_bytes: 32_000_000_000,
+                image_sha256: "f".repeat(64),
+                image_size_bytes: 536_870_912,
+                disk_guid: "00000000-0000-0000-0000-000000000001".to_string(),
+            },
+            isos: vec![IsoRecord {
+                filename: "ubuntu-24.04.iso".to_string(),
+                sha256: "a".repeat(64),
+                size_bytes: 5_368_709_120,
+                sidecars: vec!["ubuntu-24.04.iso.aegis.toml".to_string()],
+                added_at: "2026-04-19T14:35:00Z".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn attestation_schema_version_is_one() {
+        // Independent contract from the on-ESP manifest; bumping is
+        // intentional and consumer-visible.
+        assert_eq!(ATTESTATION_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn attestation_round_trip_preserves_all_fields() {
+        let a = sample_attestation();
+        let body = serde_json::to_string(&a).expect("serialize");
+        let parsed: Attestation = serde_json::from_str(&body).expect("parse");
+        assert_eq!(a, parsed);
+    }
+
+    #[test]
+    fn empty_isos_list_serializes_as_empty_array() {
+        // A freshly-flashed stick has `isos: []` — the consumer
+        // contract is that the array field is always present,
+        // never omitted. Guards against accidentally adding
+        // `#[serde(skip_serializing_if = "Vec::is_empty")]`.
+        let mut a = sample_attestation();
+        a.isos.clear();
+        let body = serde_json::to_string(&a).expect("serialize");
+        assert!(body.contains("\"isos\":[]"), "isos must be present: {body}");
     }
 }
