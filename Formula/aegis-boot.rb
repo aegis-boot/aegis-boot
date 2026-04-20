@@ -9,7 +9,7 @@
 class AegisBoot < Formula
   desc "Signed UEFI Secure Boot rescue environment for booting any ISO from USB"
   homepage "https://github.com/williamzujkowski/aegis-boot"
-  version "0.14.1"
+  version "0.15.0"
   license any_of: ["Apache-2.0", "MIT"]
 
   # Runtime dependencies the operator CLI shells out to. Listed
@@ -22,8 +22,8 @@ class AegisBoot < Formula
 
   on_linux do
     on_intel do
-      url "https://github.com/williamzujkowski/aegis-boot/releases/download/v0.14.1/aegis-boot-x86_64-linux"
-      sha256 "0715c799ef642606594e521303fa249225cc67082be01728a9de225c83abc151"
+      url "https://github.com/williamzujkowski/aegis-boot/releases/download/v0.15.0/aegis-boot-x86_64-linux"
+      sha256 "cae7fae1b70e8d7576be83f86036eac91c53cfc7397f7f98a92332bbb17467d6"
     end
   end
 
