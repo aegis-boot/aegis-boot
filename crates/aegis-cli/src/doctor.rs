@@ -277,57 +277,7 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
     }
     check_os(&mut report);
     check_machine_identity(&mut report);
-    check_command_present(&mut report, "dd", "required to write the stick");
-    check_command_present(&mut report, "sudo", "required for dd / mount");
-    check_command_present(
-        &mut report,
-        "sgdisk",
-        "verifies stick partition table after flash",
-    );
-    check_command_present(
-        &mut report,
-        "lsblk",
-        "lists removable drives for `flash` auto-detect",
-    );
-    // mkusb.sh dependencies (#313). These are required by the build
-    // path `aegis-boot init` invokes — mcopy stages the ESP, mkfs.vfat
-    // formats the ESP, mkfs.exfat formats the AEGIS_ISOS data
-    // partition (default since #243). Pre-flighting them here catches
-    // the class of late failure that motivated operator-reported
-    // bug #282.
-    check_command_present_with_pkg(
-        &mut report,
-        "mcopy",
-        "mtools",
-        "copies the signed boot chain onto the ESP (`aegis-boot flash`)",
-    );
-    check_command_present_with_pkg(
-        &mut report,
-        "mkfs.vfat",
-        "dosfstools",
-        "formats the ESP partition FAT32 (`aegis-boot flash`)",
-    );
-    check_command_present_with_pkg(
-        &mut report,
-        "mkfs.exfat",
-        "exfatprogs",
-        "formats the AEGIS_ISOS data partition exFAT (`aegis-boot flash`)",
-    );
-    check_command_present(
-        &mut report,
-        "curl",
-        "downloads catalog ISOs (`aegis-boot fetch`) and the install one-liner",
-    );
-    check_command_present(
-        &mut report,
-        "sha256sum",
-        "verifies catalog ISO checksums (`aegis-boot fetch`)",
-    );
-    check_command_present(
-        &mut report,
-        "gpg",
-        "verifies catalog SHA256SUMS signatures (`aegis-boot fetch`)",
-    );
+    check_host_commands(&mut report);
     check_cosign_optional(&mut report);
     check_secureboot_state(&mut report);
     check_removable_drives(&mut report);
@@ -640,8 +590,105 @@ fn check_cosign_optional(report: &mut Report) {
     }
 }
 
+/// Runs every command-presence check doctor does for the host.
+/// Extracted from `try_run` so the top-level stays focused on orchestration
+/// (also keeps `try_run` under the clippy `too_many_lines` budget).
+///
+/// Ordering matches what operators see on stdout — do not reorder without
+/// updating any docs / screenshots that show the expected output.
+fn check_host_commands(report: &mut Report) {
+    // #333: bare binary names produced wrong remedies (e.g. "apt-get
+    // install dd"). Fix is per-family pkg names — see `PkgNames`.
+    check_command_present_with_pkg(report, "dd", "coreutils", "required to write the stick");
+    check_command_present(report, "sudo", "required for dd / mount");
+    check_command_present_with_pkgs(
+        report,
+        "sgdisk",
+        PkgNames {
+            apt: "gdisk",
+            dnf: "gdisk",
+            pacman: "gptfdisk",
+        },
+        "verifies stick partition table after flash",
+    );
+    check_command_present_with_pkg(
+        report,
+        "lsblk",
+        "util-linux",
+        "lists removable drives for `flash` auto-detect",
+    );
+    // mkusb.sh dependencies (#313). These are required by the build
+    // path `aegis-boot init` invokes — mcopy stages the ESP, mkfs.vfat
+    // formats the ESP, mkfs.exfat formats the AEGIS_ISOS data
+    // partition (default since #243). Pre-flighting them here catches
+    // the class of late failure that motivated operator-reported
+    // bug #282.
+    check_command_present_with_pkg(
+        report,
+        "mcopy",
+        "mtools",
+        "copies the signed boot chain onto the ESP (`aegis-boot flash`)",
+    );
+    check_command_present_with_pkg(
+        report,
+        "mkfs.vfat",
+        "dosfstools",
+        "formats the ESP partition FAT32 (`aegis-boot flash`)",
+    );
+    check_command_present_with_pkg(
+        report,
+        "mkfs.exfat",
+        "exfatprogs",
+        "formats the AEGIS_ISOS data partition exFAT (`aegis-boot flash`)",
+    );
+    check_command_present(
+        report,
+        "curl",
+        "downloads catalog ISOs (`aegis-boot fetch`) and the install one-liner",
+    );
+    check_command_present_with_pkg(
+        report,
+        "sha256sum",
+        "coreutils",
+        "verifies catalog ISO checksums (`aegis-boot fetch`)",
+    );
+    check_command_present_with_pkgs(
+        report,
+        "gpg",
+        PkgNames {
+            apt: "gnupg",
+            dnf: "gnupg2",
+            pacman: "gnupg",
+        },
+        "verifies catalog SHA256SUMS signatures (`aegis-boot fetch`)",
+    );
+}
+
 fn check_command_present(report: &mut Report, cmd: &str, why: &str) {
     check_command_present_with_pkg(report, cmd, cmd, why);
+}
+
+/// Per-family package names for a single command. Used when a
+/// binary ships in a differently-named package on different distro
+/// families — e.g. `sgdisk` is in `gdisk` on Debian/Fedora but
+/// `gptfdisk` on Arch/openSUSE. See #333 for the audit that
+/// surfaced these mismatches.
+#[derive(Debug, Clone, Copy)]
+struct PkgNames<'a> {
+    apt: &'a str,
+    dnf: &'a str,
+    pacman: &'a str,
+}
+
+impl<'a> PkgNames<'a> {
+    /// The common case: one package name across all three families.
+    const fn same(name: &'a str) -> Self {
+        Self {
+            apt: name,
+            dnf: name,
+            pacman: name,
+        }
+    }
 }
 
 /// Like [`check_command_present`] but lets callers specify the
@@ -649,6 +696,13 @@ fn check_command_present(report: &mut Report, cmd: &str, why: &str) {
 /// `mkfs.vfat` binary ships in the `dosfstools` package). Used for
 /// the mkusb.sh dependency preflight (#313).
 fn check_command_present_with_pkg(report: &mut Report, cmd: &str, pkg: &str, why: &str) {
+    check_command_present_with_pkgs(report, cmd, PkgNames::same(pkg), why);
+}
+
+/// Like [`check_command_present_with_pkg`] but supports per-family
+/// package names for binaries whose packaging diverges across
+/// distros. See [`PkgNames`] for the family slots.
+fn check_command_present_with_pkgs(report: &mut Report, cmd: &str, pkgs: PkgNames, why: &str) {
     let found = which(cmd);
     let name = format!("command: {cmd}");
     if let Some(path) = found {
@@ -659,9 +713,10 @@ fn check_command_present_with_pkg(report: &mut Report, cmd: &str, pkg: &str, why
             name,
             format!("not found in PATH ({why})"),
             format!(
-                "install `{cmd}` (on Debian/Ubuntu: `sudo apt-get install {pkg}`; \
-                 on Fedora/RHEL: `sudo dnf install {pkg}`; \
-                 on Arch: `sudo pacman -S {pkg}`)"
+                "install `{cmd}` (on Debian/Ubuntu: `sudo apt-get install {}`; \
+                 on Fedora/RHEL: `sudo dnf install {}`; \
+                 on Arch: `sudo pacman -S {}`)",
+                pkgs.apt, pkgs.dnf, pkgs.pacman,
             ),
         );
     }
@@ -1074,6 +1129,37 @@ mod tests {
             r.rows[0].0
         );
         assert!(r.rows[0].2.contains("canary"));
+    }
+
+    #[test]
+    fn check_command_present_with_pkgs_splits_per_family() {
+        // #333: sgdisk is `gdisk` on apt/dnf but `gptfdisk` on pacman.
+        // The remedy must name each family's correct package, not
+        // the same name three times.
+        let mut r = Report::new();
+        check_command_present_with_pkgs(
+            &mut r,
+            "aegis-probe-sgdisk-never-installed",
+            PkgNames {
+                apt: "gdisk",
+                dnf: "gdisk",
+                pacman: "gptfdisk",
+            },
+            "probe",
+        );
+        let na = r.next_action.as_deref().unwrap_or("");
+        assert!(
+            na.contains("apt-get install gdisk"),
+            "remedy must name apt pkg, got: {na}"
+        );
+        assert!(
+            na.contains("dnf install gdisk"),
+            "remedy must name dnf pkg, got: {na}"
+        );
+        assert!(
+            na.contains("pacman -S gptfdisk"),
+            "remedy must name pacman pkg separately, got: {na}"
+        );
     }
 
     #[test]
