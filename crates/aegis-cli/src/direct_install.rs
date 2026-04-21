@@ -142,21 +142,44 @@ pub(crate) use crate::constants::GRUB_TIMEOUT_SECS;
 
 /// Default menuentry selected on boot. 0 = tty0-primary rescue (the
 /// right choice for a local-monitor operator). Matches mkusb.sh's
-/// `MKUSB_GRUB_DEFAULT:-0` fallback; direct-install does not expose
-/// the override env var because it's a CLI-driven path and the
-/// equivalent knob will be a `flash --serial-default` flag in Phase 3.
+/// `MKUSB_GRUB_DEFAULT:-0` fallback. Operators needing the
+/// serial-primary variant (no local monitor) set the same
+/// `MKUSB_GRUB_DEFAULT` env var that mkusb.sh honors — see
+/// [`resolve_grub_default_entry`]. Same knob → same value →
+/// byte-identical grub.cfg across both flash paths, which is the
+/// byte-parity invariant the direct-install E2E asserts.
 pub(crate) const GRUB_DEFAULT_ENTRY: u32 = 0;
 
+/// Resolve the grub default-entry index honoring the same
+/// `MKUSB_GRUB_DEFAULT` env var that `scripts/mkusb.sh` consumes.
+/// Values outside the known menuentry range (0, 1, 2) fall back to
+/// [`GRUB_DEFAULT_ENTRY`] silently — operators passing a bogus value
+/// should get the safe default, not a flash-time failure.
+pub(crate) fn resolve_grub_default_entry() -> u32 {
+    resolve_grub_default_entry_from(std::env::var("MKUSB_GRUB_DEFAULT").ok().as_deref())
+}
+
+/// Pure form for unit testing. The crate is `forbid(unsafe_code)`, so
+/// tests can't use `env::set_var` (unsafe in edition 2024) — passing
+/// the env value as an argument keeps the predicate testable without
+/// touching process-global state.
+pub(crate) fn resolve_grub_default_entry_from(env_value: Option<&str>) -> u32 {
+    env_value
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|&n| n <= 2)
+        .unwrap_or(GRUB_DEFAULT_ENTRY)
+}
+
 /// Render the 3-entry rescue-tui grub menu to `out`. Matches the
-/// literal text produced by `scripts/mkusb.sh:145-178` with the
-/// `MKUSB_GRUB_DEFAULT` override defaulted to 0 (the tty0-primary
-/// rescue menuentry).
+/// literal text produced by `scripts/mkusb.sh:145-178`, including
+/// the `MKUSB_GRUB_DEFAULT` override hook — the byte-parity CI gate
+/// in `.github/workflows/direct-install-e2e.yml` confirms this.
 ///
 /// Kept as a standalone text render rather than a template file so
 /// direct-install stays buildable without an asset directory and the
 /// output is unit-testable on content invariants without file fs.
 pub(crate) fn render_grub_cfg(out: &Path) -> Result<(), String> {
-    let body = build_grub_cfg_body(GRUB_TIMEOUT_SECS, GRUB_DEFAULT_ENTRY);
+    let body = build_grub_cfg_body(GRUB_TIMEOUT_SECS, resolve_grub_default_entry());
     fs::write(out, body).map_err(|e| format!("grub.cfg write {}: {e}", out.display()))
 }
 
@@ -571,12 +594,47 @@ mod tests {
         // tempfile::TempDir rather than std::env::temp_dir so the
         // test fs ops happen inside a private, auto-cleaned 0700 dir
         // (semgrep rust.lang.security.temp-dir flags the latter).
+        //
+        // Note on env-dependence: render_grub_cfg now reads
+        // MKUSB_GRUB_DEFAULT via resolve_grub_default_entry(). We
+        // compare against resolve_grub_default_entry() rather than
+        // the bare GRUB_DEFAULT_ENTRY constant so a dev running with
+        // MKUSB_GRUB_DEFAULT=1 in their shell doesn't fail this test
+        // falsely — the rendering contract is "render whatever
+        // resolver returns," not "always render 0."
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("grub.cfg");
         render_grub_cfg(&path).expect("render_grub_cfg");
         let written = std::fs::read_to_string(&path).expect("read back grub.cfg");
-        let expected = build_grub_cfg_body(GRUB_TIMEOUT_SECS, GRUB_DEFAULT_ENTRY);
+        let expected = build_grub_cfg_body(GRUB_TIMEOUT_SECS, resolve_grub_default_entry());
         assert_eq!(written, expected);
+    }
+
+    #[test]
+    fn resolve_grub_default_entry_honors_env_values() {
+        // Byte-parity invariant: same knob mkusb.sh honors must select
+        // the same grub.cfg content in direct-install. Unset env =
+        // fallback to GRUB_DEFAULT_ENTRY (0); "1" → serial-primary;
+        // "2" → verbose; out-of-range / malformed → safe fallback.
+        assert_eq!(resolve_grub_default_entry_from(None), GRUB_DEFAULT_ENTRY);
+        assert_eq!(resolve_grub_default_entry_from(Some("0")), 0);
+        assert_eq!(resolve_grub_default_entry_from(Some("1")), 1);
+        assert_eq!(resolve_grub_default_entry_from(Some("2")), 2);
+        assert_eq!(
+            resolve_grub_default_entry_from(Some("3")),
+            GRUB_DEFAULT_ENTRY,
+            "out-of-range value falls back — no flash-time failure"
+        );
+        assert_eq!(
+            resolve_grub_default_entry_from(Some("not-a-number")),
+            GRUB_DEFAULT_ENTRY,
+            "malformed value falls back silently"
+        );
+        assert_eq!(
+            resolve_grub_default_entry_from(Some("")),
+            GRUB_DEFAULT_ENTRY,
+            "empty string falls back silently"
+        );
     }
 
     #[test]
