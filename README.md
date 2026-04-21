@@ -77,14 +77,23 @@ Each release ships a static-musl `aegis-boot-x86_64-linux` binary plus its Sigst
 
 Then the operator flow — pick one:
 
-### One command — `aegis-boot init` (recommended for new users)
+### Fastest path — `aegis-boot quickstart` (new in v0.16)
 
 ```bash
-# Empty stick → rescue-ready in under 10 minutes
+# Empty stick → booted rescue with Alpine 3.20 in under 10 min (#352)
+sudo aegis-boot quickstart /dev/sdc
+```
+
+Thin wrapper over `init --profile minimal --yes --direct-install`. Single signed-chain stick + Alpine 3.20 Standard (~200 MiB) ready in the rescue-tui menu. Device argument is **required** — no auto-detect, by deliberate design (data-loss risk on a misclassified mount). See [`aegis-boot quickstart`](./docs/CLI.md#aegis-boot-quickstart).
+
+### Three-distro kit — `aegis-boot init`
+
+```bash
+# Empty stick → rescue-ready with 3 ISOs (~5 GiB)
 sudo aegis-boot init /dev/sdc --yes
 ```
 
-Composes `doctor → flash → fetch + add` for every ISO in the default `panic-room` profile (Alpine 3.20 + Ubuntu 24.04 Server + Rocky 9, ~5 GiB total). Produces one attestation manifest spanning the whole run. See [`aegis-boot init`](./docs/CLI.md#aegis-boot-init) for profiles and options.
+Composes `doctor → flash → fetch + add` for every ISO in the default `panic-room` profile (Alpine 3.20 + Ubuntu 24.04 Server + Rocky 9). Produces one attestation manifest spanning the whole run. See [`aegis-boot init`](./docs/CLI.md#aegis-boot-init) for profiles and options.
 
 ### Step-by-step — when you want a custom ISO set
 
