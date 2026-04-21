@@ -186,6 +186,14 @@ pub(crate) fn render_grub_cfg(out: &Path) -> Result<(), String> {
 /// Pure builder: returns the grub.cfg body string for the given
 /// timeout + default entry. Split out from [`render_grub_cfg`] so the
 /// content can be asserted in unit tests without touching the fs.
+///
+/// BYTE-PARITY INVARIANT: every character of this output — including
+/// the explanatory comments before each menuentry — must match
+/// `scripts/mkusb.sh:145-178` verbatim. The direct-install E2E
+/// (`.github/workflows/direct-install-e2e.yml`) asserts sha256 parity
+/// between the two paths' ESPs; a one-character drift in a comment
+/// fails the gate. If you need to change a comment, change mkusb.sh
+/// and this function in the same commit.
 pub(crate) fn build_grub_cfg_body(timeout_secs: u32, default_entry: u32) -> String {
     format!(
         "set timeout={timeout_secs}
@@ -193,18 +201,27 @@ set default={default_entry}
 
 # Normal boot — concise kernel logs.
 # console= order MATTERS: last one wins as /dev/console for userspace.
+# We want tty0 (local monitor) as the default rescue-tui target on
+# real-hardware boots; kernel still echoes to all console= targets
+# so a serial operator gets dmesg + can edit grub to flip the order.
+# (#112)
 menuentry \"aegis-boot rescue\" {{
     linux /vmlinuz console=ttyS0,115200 console=tty0 panic=5 loglevel=4
     initrd /initrd.img
 }}
 
-# Serial-primary variant — for operators using a serial console.
+# Serial-primary variant — for operators using a serial console or a
+# KVM IP console with no local monitor. rescue-tui's alt-screen
+# renders on ttyS0.
 menuentry \"aegis-boot rescue (serial-primary)\" {{
     linux /vmlinuz console=tty0 console=ttyS0,115200 panic=5 loglevel=4
     initrd /initrd.img
 }}
 
-# Verbose boot — loglevel=7 + earlyprintk + aegis.verbose=1.
+# Verbose boot (#109 shakedown) — loglevel=7, earlyprintk, and
+# AEGIS_BOOT_VERBOSE=1 causes /init to pause 30s after diagnostics so
+# the operator can read the pre-rescue-tui state on screen. Also tees
+# the /init log to /run/media/aegis-isos/aegis-boot-<ts>.log.
 menuentry \"aegis-boot rescue (verbose — first-boot debug)\" {{
     linux /vmlinuz console=ttyS0,115200 console=tty0 panic=30 loglevel=7 earlyprintk=efi ignore_loglevel aegis.verbose=1
     initrd /initrd.img
@@ -608,6 +625,55 @@ mod tests {
         let written = std::fs::read_to_string(&path).expect("read back grub.cfg");
         let expected = build_grub_cfg_body(GRUB_TIMEOUT_SECS, resolve_grub_default_entry());
         assert_eq!(written, expected);
+    }
+
+    #[test]
+    fn build_grub_cfg_body_matches_mkusb_sh_byte_for_byte() {
+        // Committed reference of the exact byte sequence scripts/mkusb.sh
+        // emits for the grub.cfg at MKUSB_GRUB_DEFAULT=1 / timeout=3.
+        // The direct-install E2E asserts sha256 parity between the two
+        // paths' ESPs (`.github/workflows/direct-install-e2e.yml`); this
+        // test catches drift at `cargo test` time instead of after a
+        // 2-minute E2E round trip. If mkusb.sh changes, update both
+        // files in the same commit.
+        let expected = "\
+set timeout=3
+set default=1
+
+# Normal boot — concise kernel logs.
+# console= order MATTERS: last one wins as /dev/console for userspace.
+# We want tty0 (local monitor) as the default rescue-tui target on
+# real-hardware boots; kernel still echoes to all console= targets
+# so a serial operator gets dmesg + can edit grub to flip the order.
+# (#112)
+menuentry \"aegis-boot rescue\" {
+    linux /vmlinuz console=ttyS0,115200 console=tty0 panic=5 loglevel=4
+    initrd /initrd.img
+}
+
+# Serial-primary variant — for operators using a serial console or a
+# KVM IP console with no local monitor. rescue-tui's alt-screen
+# renders on ttyS0.
+menuentry \"aegis-boot rescue (serial-primary)\" {
+    linux /vmlinuz console=tty0 console=ttyS0,115200 panic=5 loglevel=4
+    initrd /initrd.img
+}
+
+# Verbose boot (#109 shakedown) — loglevel=7, earlyprintk, and
+# AEGIS_BOOT_VERBOSE=1 causes /init to pause 30s after diagnostics so
+# the operator can read the pre-rescue-tui state on screen. Also tees
+# the /init log to /run/media/aegis-isos/aegis-boot-<ts>.log.
+menuentry \"aegis-boot rescue (verbose — first-boot debug)\" {
+    linux /vmlinuz console=ttyS0,115200 console=tty0 panic=30 loglevel=7 earlyprintk=efi ignore_loglevel aegis.verbose=1
+    initrd /initrd.img
+}
+";
+        let got = build_grub_cfg_body(3, 1);
+        assert_eq!(
+            got, expected,
+            "grub.cfg drift from mkusb.sh — byte-parity E2E will fail. \
+             Update scripts/mkusb.sh:145-178 and this test together."
+        );
     }
 
     #[test]
