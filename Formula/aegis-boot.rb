@@ -21,27 +21,25 @@ class AegisBoot < Formula
   depends_on "gnupg"
   depends_on "gptfdisk" # provides sgdisk
 
+  on_macos do
+    on_arm do
+      # macOS arm64 support starts at v0.16.0 (per #365 Phase A1, which
+      # added the release.yml job that builds the aarch64-apple-darwin
+      # binary). Until v0.16.0 ships, this block's URL 404s and `brew
+      # install` fails clean on the download step — no silent-wrong-binary
+      # risk. The sha256 value is 64 zeros so it passes `brew audit` as
+      # syntactically valid hex; bump-brew-formula replaces it with the
+      # real sha when v0.16.0 is tagged.
+      url "https://github.com/williamzujkowski/aegis-boot/releases/download/v0.16.0/aegis-boot-aarch64-apple-darwin"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    end
+  end
+
   on_linux do
     on_intel do
       # v0.15.0 Linux binary — real URL + sha, `brew install` works today.
       url "https://github.com/williamzujkowski/aegis-boot/releases/download/v0.15.0/aegis-boot-x86_64-linux"
       sha256 "cae7fae1b70e8d7576be83f86036eac91c53cfc7397f7f98a92332bbb17467d6"
-    end
-  end
-
-  on_macos do
-    on_arm do
-      # macOS arm64 support starts at v0.16.0 (per #365 Phase A1, which
-      # added the release.yml job that builds the aarch64-apple-darwin
-      # binary). Until v0.16.0 ships, this block carries intentional
-      # placeholder values — `brew install` on macOS will fail clean
-      # with "invalid sha256" (no silent-wrong-binary risk).
-      #
-      # When the maintainer cuts v0.16.0, the `bump-brew-formula` job
-      # in release.yml sed-replaces these placeholders with the real
-      # sha from SHA256SUMS, atomically with the Linux block.
-      url "https://github.com/williamzujkowski/aegis-boot/releases/download/v0.16.0/aegis-boot-aarch64-apple-darwin"
-      sha256 "PLACEHOLDER_MACOS_ARM64_SHA"
     end
   end
 
