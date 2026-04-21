@@ -13,17 +13,16 @@
 //!   * [`combine_initrd`] — concat distro initrd + aegis-boot initramfs.
 //!   * [`stage_esp`] — mmd + mcopy the signed chain onto partition 1.
 //!
-//! The signed-manifest attestation lands in Phase 2c under #274 —
-//! see the epic for the phased rollout.
+//! The signed-manifest attestation lives in
+//! [`crate::direct_install_manifest`] — see the epic for the phased
+//! rollout.
 //!
-//! **No caller wired up yet.** This is the foundation slice — the
-//! flash command still goes through the mkusb.sh + dd path; a future
-//! PR adds a `--direct-install` flag that dispatches to these helpers
-//! instead. `#[allow(dead_code)]` at the module level rides until
-//! that next PR drops the flag and wires the call-site.
+//! Wired into `aegis-boot flash --direct-install` (#274 Phase 3) via
+//! [`crate::flash::flash_direct_install`]. The legacy `mkusb.sh + dd`
+//! path is still the default; direct-install is opt-in until the
+//! 10-run green-streak gate from #274 Phase 4 flips it.
 
 #![cfg(target_os = "linux")]
-#![allow(dead_code)]
 
 use std::fs;
 use std::path::Path;
@@ -143,27 +142,58 @@ pub(crate) use crate::constants::GRUB_TIMEOUT_SECS;
 
 /// Default menuentry selected on boot. 0 = tty0-primary rescue (the
 /// right choice for a local-monitor operator). Matches mkusb.sh's
-/// `MKUSB_GRUB_DEFAULT:-0` fallback; direct-install does not expose
-/// the override env var because it's a CLI-driven path and the
-/// equivalent knob will be a `flash --serial-default` flag in Phase 3.
+/// `MKUSB_GRUB_DEFAULT:-0` fallback. Operators needing the
+/// serial-primary variant (no local monitor) set the same
+/// `MKUSB_GRUB_DEFAULT` env var that mkusb.sh honors — see
+/// [`resolve_grub_default_entry`]. Same knob → same value →
+/// byte-identical grub.cfg across both flash paths, which is the
+/// byte-parity invariant the direct-install E2E asserts.
 pub(crate) const GRUB_DEFAULT_ENTRY: u32 = 0;
 
+/// Resolve the grub default-entry index honoring the same
+/// `MKUSB_GRUB_DEFAULT` env var that `scripts/mkusb.sh` consumes.
+/// Values outside the known menuentry range (0, 1, 2) fall back to
+/// [`GRUB_DEFAULT_ENTRY`] silently — operators passing a bogus value
+/// should get the safe default, not a flash-time failure.
+pub(crate) fn resolve_grub_default_entry() -> u32 {
+    resolve_grub_default_entry_from(std::env::var("MKUSB_GRUB_DEFAULT").ok().as_deref())
+}
+
+/// Pure form for unit testing. The crate is `forbid(unsafe_code)`, so
+/// tests can't use `env::set_var` (unsafe in edition 2024) — passing
+/// the env value as an argument keeps the predicate testable without
+/// touching process-global state.
+pub(crate) fn resolve_grub_default_entry_from(env_value: Option<&str>) -> u32 {
+    env_value
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|&n| n <= 2)
+        .unwrap_or(GRUB_DEFAULT_ENTRY)
+}
+
 /// Render the 3-entry rescue-tui grub menu to `out`. Matches the
-/// literal text produced by `scripts/mkusb.sh:145-178` with the
-/// `MKUSB_GRUB_DEFAULT` override defaulted to 0 (the tty0-primary
-/// rescue menuentry).
+/// literal text produced by `scripts/mkusb.sh:145-178`, including
+/// the `MKUSB_GRUB_DEFAULT` override hook — the byte-parity CI gate
+/// in `.github/workflows/direct-install-e2e.yml` confirms this.
 ///
 /// Kept as a standalone text render rather than a template file so
 /// direct-install stays buildable without an asset directory and the
 /// output is unit-testable on content invariants without file fs.
 pub(crate) fn render_grub_cfg(out: &Path) -> Result<(), String> {
-    let body = build_grub_cfg_body(GRUB_TIMEOUT_SECS, GRUB_DEFAULT_ENTRY);
+    let body = build_grub_cfg_body(GRUB_TIMEOUT_SECS, resolve_grub_default_entry());
     fs::write(out, body).map_err(|e| format!("grub.cfg write {}: {e}", out.display()))
 }
 
 /// Pure builder: returns the grub.cfg body string for the given
 /// timeout + default entry. Split out from [`render_grub_cfg`] so the
 /// content can be asserted in unit tests without touching the fs.
+///
+/// BYTE-PARITY INVARIANT: every character of this output — including
+/// the explanatory comments before each menuentry — must match
+/// `scripts/mkusb.sh:145-178` verbatim. The direct-install E2E
+/// (`.github/workflows/direct-install-e2e.yml`) asserts sha256 parity
+/// between the two paths' ESPs; a one-character drift in a comment
+/// fails the gate. If you need to change a comment, change mkusb.sh
+/// and this function in the same commit.
 pub(crate) fn build_grub_cfg_body(timeout_secs: u32, default_entry: u32) -> String {
     format!(
         "set timeout={timeout_secs}
@@ -171,18 +201,27 @@ set default={default_entry}
 
 # Normal boot — concise kernel logs.
 # console= order MATTERS: last one wins as /dev/console for userspace.
+# We want tty0 (local monitor) as the default rescue-tui target on
+# real-hardware boots; kernel still echoes to all console= targets
+# so a serial operator gets dmesg + can edit grub to flip the order.
+# (#112)
 menuentry \"aegis-boot rescue\" {{
     linux /vmlinuz console=ttyS0,115200 console=tty0 panic=5 loglevel=4
     initrd /initrd.img
 }}
 
-# Serial-primary variant — for operators using a serial console.
+# Serial-primary variant — for operators using a serial console or a
+# KVM IP console with no local monitor. rescue-tui's alt-screen
+# renders on ttyS0.
 menuentry \"aegis-boot rescue (serial-primary)\" {{
     linux /vmlinuz console=tty0 console=ttyS0,115200 panic=5 loglevel=4
     initrd /initrd.img
 }}
 
-# Verbose boot — loglevel=7 + earlyprintk + aegis.verbose=1.
+# Verbose boot (#109 shakedown) — loglevel=7, earlyprintk, and
+# AEGIS_BOOT_VERBOSE=1 causes /init to pause 30s after diagnostics so
+# the operator can read the pre-rescue-tui state on screen. Also tees
+# the /init log to /run/media/aegis-isos/aegis-boot-<ts>.log.
 menuentry \"aegis-boot rescue (verbose — first-boot debug)\" {{
     linux /vmlinuz console=ttyS0,115200 console=tty0 panic=30 loglevel=7 earlyprintk=efi ignore_loglevel aegis.verbose=1
     initrd /initrd.img
@@ -572,12 +611,96 @@ mod tests {
         // tempfile::TempDir rather than std::env::temp_dir so the
         // test fs ops happen inside a private, auto-cleaned 0700 dir
         // (semgrep rust.lang.security.temp-dir flags the latter).
+        //
+        // Note on env-dependence: render_grub_cfg now reads
+        // MKUSB_GRUB_DEFAULT via resolve_grub_default_entry(). We
+        // compare against resolve_grub_default_entry() rather than
+        // the bare GRUB_DEFAULT_ENTRY constant so a dev running with
+        // MKUSB_GRUB_DEFAULT=1 in their shell doesn't fail this test
+        // falsely — the rendering contract is "render whatever
+        // resolver returns," not "always render 0."
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("grub.cfg");
         render_grub_cfg(&path).expect("render_grub_cfg");
         let written = std::fs::read_to_string(&path).expect("read back grub.cfg");
-        let expected = build_grub_cfg_body(GRUB_TIMEOUT_SECS, GRUB_DEFAULT_ENTRY);
+        let expected = build_grub_cfg_body(GRUB_TIMEOUT_SECS, resolve_grub_default_entry());
         assert_eq!(written, expected);
+    }
+
+    #[test]
+    fn build_grub_cfg_body_matches_mkusb_sh_byte_for_byte() {
+        // Committed reference of the exact byte sequence scripts/mkusb.sh
+        // emits for the grub.cfg at MKUSB_GRUB_DEFAULT=1 / timeout=3.
+        // The direct-install E2E asserts sha256 parity between the two
+        // paths' ESPs (`.github/workflows/direct-install-e2e.yml`); this
+        // test catches drift at `cargo test` time instead of after a
+        // 2-minute E2E round trip. If mkusb.sh changes, update both
+        // files in the same commit.
+        let expected = "\
+set timeout=3
+set default=1
+
+# Normal boot — concise kernel logs.
+# console= order MATTERS: last one wins as /dev/console for userspace.
+# We want tty0 (local monitor) as the default rescue-tui target on
+# real-hardware boots; kernel still echoes to all console= targets
+# so a serial operator gets dmesg + can edit grub to flip the order.
+# (#112)
+menuentry \"aegis-boot rescue\" {
+    linux /vmlinuz console=ttyS0,115200 console=tty0 panic=5 loglevel=4
+    initrd /initrd.img
+}
+
+# Serial-primary variant — for operators using a serial console or a
+# KVM IP console with no local monitor. rescue-tui's alt-screen
+# renders on ttyS0.
+menuentry \"aegis-boot rescue (serial-primary)\" {
+    linux /vmlinuz console=tty0 console=ttyS0,115200 panic=5 loglevel=4
+    initrd /initrd.img
+}
+
+# Verbose boot (#109 shakedown) — loglevel=7, earlyprintk, and
+# AEGIS_BOOT_VERBOSE=1 causes /init to pause 30s after diagnostics so
+# the operator can read the pre-rescue-tui state on screen. Also tees
+# the /init log to /run/media/aegis-isos/aegis-boot-<ts>.log.
+menuentry \"aegis-boot rescue (verbose — first-boot debug)\" {
+    linux /vmlinuz console=ttyS0,115200 console=tty0 panic=30 loglevel=7 earlyprintk=efi ignore_loglevel aegis.verbose=1
+    initrd /initrd.img
+}
+";
+        let got = build_grub_cfg_body(3, 1);
+        assert_eq!(
+            got, expected,
+            "grub.cfg drift from mkusb.sh — byte-parity E2E will fail. \
+             Update scripts/mkusb.sh:145-178 and this test together."
+        );
+    }
+
+    #[test]
+    fn resolve_grub_default_entry_honors_env_values() {
+        // Byte-parity invariant: same knob mkusb.sh honors must select
+        // the same grub.cfg content in direct-install. Unset env =
+        // fallback to GRUB_DEFAULT_ENTRY (0); "1" → serial-primary;
+        // "2" → verbose; out-of-range / malformed → safe fallback.
+        assert_eq!(resolve_grub_default_entry_from(None), GRUB_DEFAULT_ENTRY);
+        assert_eq!(resolve_grub_default_entry_from(Some("0")), 0);
+        assert_eq!(resolve_grub_default_entry_from(Some("1")), 1);
+        assert_eq!(resolve_grub_default_entry_from(Some("2")), 2);
+        assert_eq!(
+            resolve_grub_default_entry_from(Some("3")),
+            GRUB_DEFAULT_ENTRY,
+            "out-of-range value falls back — no flash-time failure"
+        );
+        assert_eq!(
+            resolve_grub_default_entry_from(Some("not-a-number")),
+            GRUB_DEFAULT_ENTRY,
+            "malformed value falls back silently"
+        );
+        assert_eq!(
+            resolve_grub_default_entry_from(Some("")),
+            GRUB_DEFAULT_ENTRY,
+            "empty string falls back silently"
+        );
     }
 
     #[test]
