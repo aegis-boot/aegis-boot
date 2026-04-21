@@ -226,6 +226,7 @@ Composes with `flash`:
 aegis-boot flash — write aegis-boot to a USB stick
 
 USAGE: aegis-boot flash [DEVICE] [--dry-run] [--yes] [--image PATH] [--no-progress]
+                       [--direct-install [--out-dir PATH]]
   No DEVICE        = auto-detect removable drives.
   /dev/sdX (Linux) or /dev/diskN (macOS) = flash to that drive.
   --dry-run        = print the typed Plan of operations and exit
@@ -241,6 +242,12 @@ USAGE: aegis-boot flash [DEVICE] [--dry-run] [--yes] [--image PATH] [--no-progre
                      post-flash. Without this flag, a fresh stick gets the full
                      device as its ISO partition (#242). Rare — use when you
                      deliberately want the small mkusb-default partition size.
+  --direct-install = bypass mkusb.sh + dd. Partition + format + stage the signed
+                     boot chain in place via sgdisk + mkfs.{fat,exfat} + mtools.
+                     ~30 sec vs ~4 min on USB 2.0. Linux only. (#274 Phase 3)
+                     Mutually exclusive with --image.
+  --out-dir PATH   = directory holding the aegis-boot initramfs.cpio.gz for
+                     --direct-install. Default: ./out (mkusb.sh convention).
 ```
 
 ## `aegis-boot init`

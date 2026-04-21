@@ -13,17 +13,16 @@
 //!   * [`combine_initrd`] — concat distro initrd + aegis-boot initramfs.
 //!   * [`stage_esp`] — mmd + mcopy the signed chain onto partition 1.
 //!
-//! The signed-manifest attestation lands in Phase 2c under #274 —
-//! see the epic for the phased rollout.
+//! The signed-manifest attestation lives in
+//! [`crate::direct_install_manifest`] — see the epic for the phased
+//! rollout.
 //!
-//! **No caller wired up yet.** This is the foundation slice — the
-//! flash command still goes through the mkusb.sh + dd path; a future
-//! PR adds a `--direct-install` flag that dispatches to these helpers
-//! instead. `#[allow(dead_code)]` at the module level rides until
-//! that next PR drops the flag and wires the call-site.
+//! Wired into `aegis-boot flash --direct-install` (#274 Phase 3) via
+//! [`crate::flash::flash_direct_install`]. The legacy `mkusb.sh + dd`
+//! path is still the default; direct-install is opt-in until the
+//! 10-run green-streak gate from #274 Phase 4 flips it.
 
 #![cfg(target_os = "linux")]
-#![allow(dead_code)]
 
 use std::fs;
 use std::path::Path;

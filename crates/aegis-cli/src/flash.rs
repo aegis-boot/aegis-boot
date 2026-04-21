@@ -28,49 +28,130 @@ pub fn run(args: &[String]) -> ExitCode {
 /// can branch on success/failure without comparing opaque `ExitCode`s.
 /// Shape matches the public `run` surface — same args, same semantics —
 /// just with a typed error channel.
-pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
-    let mut explicit_dev: Option<&str> = None;
-    let mut assume_yes = false;
-    let mut prebuilt_image: Option<PathBuf> = None;
-    let mut dry_run = false;
-    let mut no_progress = false;
-    let mut no_expand = false;
+// Many flags exposed by `aegis-boot flash` are independent boolean
+// modes (--yes / --dry-run / --no-progress / --no-expand /
+// --direct-install / --help). Splitting into a state-machine enum
+// would be more code, not less — each flag is independently set by
+// the operator. The clippy::struct_excessive_bools heuristic
+// over-fires on argv-parsing structs; suppressing here, not globally.
+#[allow(clippy::struct_excessive_bools)]
+struct ParsedArgs<'a> {
+    explicit_dev: Option<&'a str>,
+    assume_yes: bool,
+    prebuilt_image: Option<PathBuf>,
+    dry_run: bool,
+    no_progress: bool,
+    no_expand: bool,
+    direct_install: bool,
+    out_dir: Option<PathBuf>,
+    /// `Some(())` when the operator passed `--help`; the dispatcher
+    /// short-circuits on this.
+    help_requested: bool,
+}
+
+fn parse_args(args: &[String]) -> Result<ParsedArgs<'_>, u8> {
+    let mut p = ParsedArgs {
+        explicit_dev: None,
+        assume_yes: false,
+        prebuilt_image: None,
+        dry_run: false,
+        no_progress: false,
+        no_expand: false,
+        direct_install: false,
+        out_dir: None,
+        help_requested: false,
+    };
     let mut i = 0;
     while i < args.len() {
-        let a = &args[i];
-        match a.as_str() {
+        match args[i].as_str() {
             "--help" | "-h" => {
-                print_help();
-                return Ok(());
+                p.help_requested = true;
+                return Ok(p);
             }
-            "--yes" | "-y" => assume_yes = true,
-            "--dry-run" => dry_run = true,
-            "--no-progress" => no_progress = true,
-            "--no-expand" => no_expand = true,
+            "--yes" | "-y" => p.assume_yes = true,
+            "--dry-run" => p.dry_run = true,
+            "--no-progress" => p.no_progress = true,
+            "--no-expand" => p.no_expand = true,
+            "--direct-install" => p.direct_install = true,
+            "--out-dir" => {
+                i += 1;
+                let Some(v) = args.get(i) else {
+                    eprintln!("aegis-boot flash: --out-dir requires a path argument");
+                    return Err(2);
+                };
+                p.out_dir = Some(PathBuf::from(v));
+            }
+            arg if arg.starts_with("--out-dir=") => {
+                p.out_dir = Some(PathBuf::from(&arg["--out-dir=".len()..]));
+            }
             "--image" => {
                 i += 1;
-                let Some(p) = args.get(i) else {
+                let Some(v) = args.get(i) else {
                     eprintln!("aegis-boot flash: --image requires a path argument");
                     return Err(2);
                 };
-                prebuilt_image = Some(PathBuf::from(p));
+                p.prebuilt_image = Some(PathBuf::from(v));
             }
             arg if arg.starts_with("--image=") => {
-                prebuilt_image = Some(PathBuf::from(&arg["--image=".len()..]));
+                p.prebuilt_image = Some(PathBuf::from(&arg["--image=".len()..]));
             }
             arg if arg.starts_with("--") => {
                 eprintln!("aegis-boot flash: unknown option '{arg}'");
                 return Err(2);
             }
             other => {
-                if explicit_dev.is_some() {
+                if p.explicit_dev.is_some() {
                     eprintln!("aegis-boot flash: only one device allowed");
                     return Err(2);
                 }
-                explicit_dev = Some(other);
+                p.explicit_dev = Some(other);
             }
         }
         i += 1;
+    }
+    Ok(p)
+}
+
+pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
+    let p = parse_args(args)?;
+    if p.help_requested {
+        print_help();
+        return Ok(());
+    }
+    let ParsedArgs {
+        explicit_dev,
+        assume_yes,
+        prebuilt_image,
+        dry_run,
+        no_progress,
+        no_expand,
+        direct_install,
+        out_dir,
+        ..
+    } = p;
+
+    // --direct-install / --image are mutually exclusive: direct-install
+    // does in-place partition+format+stage on the target device, so a
+    // pre-built whole-disk image is not used. #274 Phase 3.
+    if direct_install && prebuilt_image.is_some() {
+        eprintln!(
+            "aegis-boot flash: --direct-install and --image are mutually exclusive\n\
+             (direct-install partitions + stages the signed chain in place; --image dd's a\n\
+             pre-built whole-disk image)"
+        );
+        return Err(2);
+    }
+    // --direct-install is Linux-only — partition/format/stage helpers
+    // shell out to sgdisk + mkfs.fat + mkfs.exfat + mtools, all
+    // Linux-resident. Macros gate the module itself with
+    // #![cfg(target_os = "linux")] so any non-Linux build wouldn't even
+    // link the dispatcher. Refuse early with a clear message.
+    #[cfg(not(target_os = "linux"))]
+    if direct_install {
+        eprintln!(
+            "aegis-boot flash: --direct-install is Linux-only (sgdisk + mkfs.fat + mkfs.exfat + mtools)"
+        );
+        return Err(2);
     }
 
     // Validate --image path up front so we fail before asking for confirmation.
@@ -107,33 +188,27 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
     }
 
     // Step 3: build + write + verify.
-    match flash(&drive, prebuilt_image.as_deref(), no_progress, no_expand) {
+    // Two paths: the legacy mkusb.sh + dd path (default), and the
+    // direct-install path (#274 Phase 3) which partitions + formats
+    // the target in place and stages the signed chain via mtools.
+    #[cfg(target_os = "linux")]
+    let result = if direct_install {
+        let resolved_out_dir = out_dir.unwrap_or_else(|| PathBuf::from("./out"));
+        flash_direct_install(&drive, &resolved_out_dir).map_err(|e| match e {
+            FlashError::DirectInstall { .. } => e.to_string(),
+            other => other.to_string(),
+        })
+    } else {
+        flash(&drive, prebuilt_image.as_deref(), no_progress, no_expand)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let result = {
+        let _ = out_dir; // unused on non-Linux
+        flash(&drive, prebuilt_image.as_deref(), no_progress, no_expand)
+    };
+    match result {
         Ok(()) => {
-            println!();
-            println!("Done. Next steps:");
-            println!("  1. Add ISOs to the stick (handles mount, verify, attestation):");
-            println!("       aegis-boot add /path/to/distro.iso");
-            println!("     (or — for a curated bundle in one command —)");
-            println!(
-                "       aegis-boot init {} --profile panic-room",
-                drive.dev.display()
-            );
-            println!("  2. Safely power-off the stick before removal:");
-            println!("       aegis-boot eject {}", drive.dev.display());
-            println!("  3. Boot the target machine from the stick (UEFI boot menu),");
-            println!("     pick an ISO in rescue-tui, and press Enter.");
-            println!();
-            #[cfg(target_os = "linux")]
-            println!(
-                "Manual fallback: sudo mount {}2 /mnt && cp *.iso /mnt/ && sudo umount /mnt",
-                drive.dev.display()
-            );
-            #[cfg(target_os = "macos")]
-            println!(
-                "Manual fallback: open Finder (the AEGIS_ISOS volume will mount automatically) \
-                 and drag ISOs into it; then `diskutil eject {}`.",
-                drive.dev.display()
-            );
+            print_post_flash_next_steps(&drive);
             Ok(())
         }
         Err(e) => {
@@ -158,10 +233,39 @@ fn print_dry_run_plan(plan: &crate::plan::Plan) {
     println!("--dry-run: no changes were made. Re-run without --dry-run to execute.");
 }
 
+fn print_post_flash_next_steps(drive: &Drive) {
+    println!();
+    println!("Done. Next steps:");
+    println!("  1. Add ISOs to the stick (handles mount, verify, attestation):");
+    println!("       aegis-boot add /path/to/distro.iso");
+    println!("     (or — for a curated bundle in one command —)");
+    println!(
+        "       aegis-boot init {} --profile panic-room",
+        drive.dev.display()
+    );
+    println!("  2. Safely power-off the stick before removal:");
+    println!("       aegis-boot eject {}", drive.dev.display());
+    println!("  3. Boot the target machine from the stick (UEFI boot menu),");
+    println!("     pick an ISO in rescue-tui, and press Enter.");
+    println!();
+    #[cfg(target_os = "linux")]
+    println!(
+        "Manual fallback: sudo mount {}2 /mnt && cp *.iso /mnt/ && sudo umount /mnt",
+        drive.dev.display()
+    );
+    #[cfg(target_os = "macos")]
+    println!(
+        "Manual fallback: open Finder (the AEGIS_ISOS volume will mount automatically) \
+         and drag ISOs into it; then `diskutil eject {}`.",
+        drive.dev.display()
+    );
+}
+
 fn print_help() {
     println!("aegis-boot flash — write aegis-boot to a USB stick");
     println!();
     println!("USAGE: aegis-boot flash [DEVICE] [--dry-run] [--yes] [--image PATH] [--no-progress]");
+    println!("                       [--direct-install [--out-dir PATH]]");
     println!("  No DEVICE        = auto-detect removable drives.");
     println!("  /dev/sdX (Linux) or /dev/diskN (macOS) = flash to that drive.");
     println!("  --dry-run        = print the typed Plan of operations and exit");
@@ -177,6 +281,12 @@ fn print_help() {
     println!("                     post-flash. Without this flag, a fresh stick gets the full");
     println!("                     device as its ISO partition (#242). Rare — use when you");
     println!("                     deliberately want the small mkusb-default partition size.");
+    println!("  --direct-install = bypass mkusb.sh + dd. Partition + format + stage the signed");
+    println!("                     boot chain in place via sgdisk + mkfs.{{fat,exfat}} + mtools.");
+    println!("                     ~30 sec vs ~4 min on USB 2.0. Linux only. (#274 Phase 3)");
+    println!("                     Mutually exclusive with --image.");
+    println!("  --out-dir PATH   = directory holding the aegis-boot initramfs.cpio.gz for");
+    println!("                     --direct-install. Default: ./out (mkusb.sh convention).");
 }
 
 /// Build the typed `Plan` describing what `aegis-boot flash` would do
@@ -412,6 +522,238 @@ fn confirm_destructive(drive: &Drive) -> bool {
         }
     }
     line.trim() == "flash"
+}
+
+/// Direct-install flash path (#274 Phase 3). Bypasses `mkusb.sh + dd`
+/// in favor of in-place partition + format + ESP-stage + auto-expand
+/// against the target device. Same trust chain on the boot side
+/// (shim → grub → kernel → rescue-tui), just provisioned by Rust
+/// helpers instead of a 30-GB whole-disk dd.
+///
+/// Sources for the signed boot chain come from `out_dir` (default
+/// `./out` mirroring `mkusb.sh`'s convention). The signed shim and
+/// grub are sourced from canonical Debian/Ubuntu apt-installed
+/// paths (`/usr/lib/shim/shimx64.efi.signed`,
+/// `/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed`); kernel
+/// and distro initrd come from `/boot/vmlinuz-*` /
+/// `/boot/initrd.img-*`; the aegis-boot initramfs comes from
+/// `<out_dir>/initramfs.cpio.gz`.
+///
+/// Phases: zap+partition → `mkfs.fat` ESP → `mkfs.exfat` data → render
+/// `grub.cfg` → concat distro+aegis initrd → `stage_esp` (`mmd` + 6
+/// `mcopy` writes). Manifest signing is gated behind a Phase 3b
+/// sub-issue.
+#[cfg(target_os = "linux")]
+fn flash_direct_install(drive: &Drive, out_dir: &Path) -> Result<(), FlashError> {
+    use crate::direct_install::{
+        combine_initrd, format_data_partition, format_esp, partition_stick, render_grub_cfg,
+        stage_esp, EspStagingSources,
+    };
+
+    let dev = &drive.dev;
+    let part1 = partition_path(dev, 1);
+    let part2 = partition_path(dev, 2);
+    let work_dir =
+        std::env::temp_dir().join(format!("aegis-direct-install-{}", std::process::id()));
+    std::fs::create_dir_all(&work_dir).map_err(|e| FlashError::DirectInstall {
+        stage: DirectInstallStage::Setup,
+        detail: format!("create work dir {}: {e}", work_dir.display()),
+    })?;
+    // Best-effort cleanup on drop — work dir holds only intermediates
+    // (combined initrd, rendered grub.cfg) that we copy onto the ESP.
+    let _work_guard = WorkDirGuard(work_dir.clone());
+
+    println!("Direct-install: {} → {}", out_dir.display(), dev.display());
+    println!("  [1/6] Partition (sgdisk)");
+    partition_stick(dev).map_err(|e| FlashError::DirectInstall {
+        stage: DirectInstallStage::Partition,
+        detail: e,
+    })?;
+
+    println!("  [2/6] Format ESP (mkfs.fat)");
+    format_esp(&part1).map_err(|e| FlashError::DirectInstall {
+        stage: DirectInstallStage::FormatEsp,
+        detail: e,
+    })?;
+
+    println!("  [3/6] Format AEGIS_ISOS (mkfs.exfat)");
+    format_data_partition(&part2).map_err(|e| FlashError::DirectInstall {
+        stage: DirectInstallStage::FormatData,
+        detail: e,
+    })?;
+
+    println!("  [4/6] Render grub.cfg");
+    let grub_cfg = work_dir.join("grub.cfg");
+    render_grub_cfg(&grub_cfg).map_err(|e| FlashError::DirectInstall {
+        stage: DirectInstallStage::RenderGrubCfg,
+        detail: e,
+    })?;
+
+    println!("  [5/6] Combine distro + aegis initrd");
+    let sources = resolve_signed_chain_sources(out_dir).map_err(|e| FlashError::DirectInstall {
+        stage: DirectInstallStage::ResolveSources,
+        detail: e,
+    })?;
+    let combined_initrd = work_dir.join("combined-initrd.img");
+    combine_initrd(
+        &sources.distro_initrd,
+        &sources.aegis_initrd,
+        &combined_initrd,
+    )
+    .map_err(|e| FlashError::DirectInstall {
+        stage: DirectInstallStage::CombineInitrd,
+        detail: e,
+    })?;
+
+    println!("  [6/6] Stage ESP (mmd + 6 mcopy writes)");
+    let staging = EspStagingSources {
+        shim: &sources.shim,
+        grub: &sources.grub,
+        kernel: &sources.kernel,
+        combined_initrd: &combined_initrd,
+        grub_cfg: &grub_cfg,
+    };
+    stage_esp(&part1, &staging).map_err(|e| FlashError::DirectInstall {
+        stage: DirectInstallStage::StageEsp,
+        detail: e,
+    })?;
+
+    println!();
+    println!("Direct-install complete on {}.", dev.display());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+struct WorkDirGuard(PathBuf);
+
+#[cfg(target_os = "linux")]
+impl Drop for WorkDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Paths to the signed-boot-chain source files for direct-install.
+/// Resolved from canonical Debian/Ubuntu apt locations + `out_dir`
+/// for the aegis-boot-built initramfs. Mirrors `scripts/mkusb.sh`'s
+/// resolution so the two paths stay byte-parity-comparable.
+#[cfg(target_os = "linux")]
+struct SignedChainSources {
+    shim: PathBuf,
+    grub: PathBuf,
+    kernel: PathBuf,
+    distro_initrd: PathBuf,
+    aegis_initrd: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_signed_chain_sources(out_dir: &Path) -> Result<SignedChainSources, String> {
+    let shim = std::env::var("SHIM_SRC").map_or_else(
+        |_| PathBuf::from("/usr/lib/shim/shimx64.efi.signed"),
+        PathBuf::from,
+    );
+    let grub = std::env::var("GRUB_SRC").map_or_else(
+        |_| PathBuf::from("/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed"),
+        PathBuf::from,
+    );
+    if !shim.is_file() {
+        return Err(format!(
+            "signed shim missing at {}; install: sudo apt-get install shim-signed grub-efi-amd64-signed",
+            shim.display()
+        ));
+    }
+    if !grub.is_file() {
+        return Err(format!(
+            "signed grub missing at {}; install: sudo apt-get install grub-efi-amd64-signed",
+            grub.display()
+        ));
+    }
+
+    // Locate signed kernel + distro initrd (mkusb.sh:74-89 logic).
+    let (kernel, distro_initrd) = if let Ok(k) = std::env::var("KERNEL_SRC") {
+        let k_path = PathBuf::from(&k);
+        let initrd = std::env::var("INITRD_SRC")
+            .map(PathBuf::from)
+            .map_err(|_| {
+                format!("KERNEL_SRC={k} requires INITRD_SRC=/path/to/matching/initrd.img")
+            })?;
+        (k_path, initrd)
+    } else {
+        find_kernel_and_initrd()?
+    };
+
+    let aegis_initrd = out_dir.join("initramfs.cpio.gz");
+    if !aegis_initrd.is_file() {
+        return Err(format!(
+            "aegis-boot initramfs missing at {}; build it first (see scripts/mkusb.sh:106 or your local build script)",
+            aegis_initrd.display()
+        ));
+    }
+
+    Ok(SignedChainSources {
+        shim,
+        grub,
+        kernel,
+        distro_initrd,
+        aegis_initrd,
+    })
+}
+
+/// Find a readable signed kernel + matching distro initrd under
+/// `/boot/`. Mirrors `scripts/mkusb.sh:74-89`.
+#[cfg(target_os = "linux")]
+fn find_kernel_and_initrd() -> Result<(PathBuf, PathBuf), String> {
+    use std::fs;
+    let boot = std::path::Path::new("/boot");
+    let mut entries: Vec<_> = fs::read_dir(boot)
+        .map_err(|e| format!("read /boot: {e}"))?
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    entries.sort();
+    for k in &entries {
+        let name = k.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if !name.starts_with("vmlinuz-") {
+            continue;
+        }
+        if !(name.ends_with("-virtual") || name.ends_with("-generic")) {
+            continue;
+        }
+        // Must be readable (signed kernels under SecureBoot have
+        // restricted read permissions on some distros — operator
+        // needs `+r` for the user running `aegis-boot flash`).
+        if fs::File::open(k).is_err() {
+            continue;
+        }
+        let ver = name.trim_start_matches("vmlinuz-");
+        let initrd = boot.join(format!("initrd.img-{ver}"));
+        if initrd.is_file() {
+            return Ok((k.clone(), initrd));
+        }
+    }
+    Err(
+        "no readable signed kernel found under /boot/vmlinuz-*-{virtual,generic}; \
+         set KERNEL_SRC=/path/to/vmlinuz + INITRD_SRC=/path/to/initrd.img"
+            .to_string(),
+    )
+}
+
+/// `/dev/sda` + N → `/dev/sdaN` (SCSI/SATA), `/dev/nvme0n1` + N →
+/// `/dev/nvme0n1pN` (NVMe), etc. Mirrors `partition2_path` from the
+/// auto-expand path.
+#[allow(clippy::doc_markdown)]
+#[cfg(target_os = "linux")]
+fn partition_path(dev: &Path, n: u32) -> PathBuf {
+    let s = dev.display().to_string();
+    // NVMe / mmc / loop devices need a 'p' separator; SCSI sticks
+    // append the number directly.
+    let needs_p =
+        s.starts_with("/dev/nvme") || s.starts_with("/dev/mmcblk") || s.starts_with("/dev/loop");
+    if needs_p {
+        PathBuf::from(format!("{s}p{n}"))
+    } else {
+        PathBuf::from(format!("{s}{n}"))
+    }
 }
 
 fn flash(
@@ -1041,11 +1383,46 @@ pub(crate) enum FlashError {
     /// can be rendered with the exact `/dev/sdX` interpolation.
     #[error("no image source available (not in a repo checkout and --image not supplied) for device {0}")]
     NoImageSource(String),
+    /// Direct-install pipeline (#274 Phase 3) failed at a specific
+    /// stage. The typed `stage` lets test assertions and operator
+    /// diagnostics pinpoint which of the 7 sequential steps failed
+    /// without parsing free-form error text.
+    #[error("direct-install {stage:?} failed: {detail}")]
+    DirectInstall {
+        stage: DirectInstallStage,
+        detail: String,
+    },
     /// Any other internal failure (stat, sync, attestation write, ...).
     /// Preserved verbatim so operators can grep it; the suggestion is
     /// generic ("re-run with `RUST_LOG=debug`" / "file an issue").
     #[error("{0}")]
     Other(String),
+}
+
+/// Per-stage marker for [`FlashError::DirectInstall`]. Each variant
+/// corresponds to one of the linear steps in [`flash_direct_install`].
+/// String form used in error messages = `Debug` form (e.g.
+/// `"DirectInstall Partition failed: ..."`); consumers that grep
+/// stderr can pin against these stable identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DirectInstallStage {
+    /// Pre-flight: temp work dir creation, dependency checks.
+    Setup,
+    /// `sgdisk` zap + fresh GPT + ESP + `AEGIS_ISOS` partition table.
+    Partition,
+    /// `mkfs.fat` on partition 1 (ESP).
+    FormatEsp,
+    /// `mkfs.exfat` on partition 2 (`AEGIS_ISOS`).
+    FormatData,
+    /// Render the 3-entry rescue-tui grub.cfg into the work dir.
+    RenderGrubCfg,
+    /// Resolve signed-chain source paths (shim, grub, kernel, initrds).
+    ResolveSources,
+    /// Concat distro initrd + aegis-boot initramfs into the combined
+    /// initrd that the kernel unpacks at boot.
+    CombineInitrd,
+    /// `mmd` the EFI dir tree + 6 `mcopy` writes onto the ESP.
+    StageEsp,
 }
 
 impl FlashError {
@@ -1081,6 +1458,7 @@ impl crate::userfacing::UserFacing for FlashError {
             Self::NoImageSource(_) => {
                 "no image to flash — aegis-boot doesn't know where to get one"
             }
+            Self::DirectInstall { .. } => "direct-install pipeline failed",
             Self::Other(_) => "flash failed",
         }
     }
@@ -1092,6 +1470,7 @@ impl crate::userfacing::UserFacing for FlashError {
             | Self::ShortReadback(s)
             | Self::NoImageSource(s)
             | Self::Other(s) => s,
+            Self::DirectInstall { detail, .. } => detail,
         }
     }
     fn suggestion(&self) -> Option<&str> {
@@ -1120,6 +1499,30 @@ impl crate::userfacing::UserFacing for FlashError {
                 "Re-run with RUST_LOG=debug for more detail. If the error persists, \
                  `aegis-boot doctor --report` captures the host state for a bug report."
             }
+            Self::DirectInstall { stage, .. } => match stage {
+                DirectInstallStage::Setup
+                | DirectInstallStage::ResolveSources
+                | DirectInstallStage::CombineInitrd
+                | DirectInstallStage::RenderGrubCfg => {
+                    "Pre-flight failed before any destructive step. The stick is untouched. \
+                     Verify the signed-chain prerequisites are installed (apt-get install \
+                     shim-signed grub-efi-amd64-signed) and your build's initramfs.cpio.gz \
+                     exists at <out_dir>/initramfs.cpio.gz."
+                }
+                DirectInstallStage::Partition
+                | DirectInstallStage::FormatEsp
+                | DirectInstallStage::FormatData => {
+                    "Partition / format failed. The stick may be in a partial state. Re-run \
+                     the command — partition_stick zaps + recreates idempotently — or fall \
+                     back to the dd path: drop --direct-install and let mkusb.sh build a fresh \
+                     image."
+                }
+                DirectInstallStage::StageEsp => {
+                    "ESP staging failed mid-write. Re-run; mcopy uses -D o (overwrite) so \
+                     re-runs are idempotent. If it persists, check that mtools is installed \
+                     (apt-get install mtools)."
+                }
+            },
             // NoImageSource is handled via suggestions() above.
             Self::NoImageSource(_) => unreachable!(),
         })
@@ -1154,7 +1557,7 @@ impl crate::userfacing::UserFacing for FlashError {
             Self::DdFailed(_) | Self::ReadbackMismatch(_) | Self::ShortReadback(_) => {
                 "https://github.com/williamzujkowski/aegis-boot/blob/main/docs/TROUBLESHOOTING.md#dd-exited-with-a-non-zero-status-partway-through"
             }
-            Self::NoImageSource(_) | Self::Other(_) => {
+            Self::NoImageSource(_) | Self::Other(_) | Self::DirectInstall { .. } => {
                 "https://github.com/williamzujkowski/aegis-boot/blob/main/docs/TROUBLESHOOTING.md"
             }
         })
@@ -1166,6 +1569,7 @@ impl crate::userfacing::UserFacing for FlashError {
             Self::ReadbackMismatch(_) => "FLASH_READBACK_MISMATCH",
             Self::ShortReadback(_) => "FLASH_READBACK_SHORT",
             Self::NoImageSource(_) => "FLASH_NO_IMAGE_SOURCE",
+            Self::DirectInstall { .. } => "FLASH_DIRECT_INSTALL",
             Self::Other(_) => "FLASH_OTHER",
         })
     }
@@ -1629,5 +2033,89 @@ mod tests {
         let short = FlashError::ShortReadback("y".into());
         assert_eq!(mismatch.suggestion(), short.suggestion());
         assert_eq!(mismatch.docs_url(), short.docs_url());
+    }
+
+    // ---- #274 Phase 3: --direct-install wiring -----------------------------
+
+    #[test]
+    fn parse_args_recognizes_direct_install_flag() {
+        let argv = vec![String::from("--direct-install")];
+        let p = parse_args(&argv).unwrap();
+        assert!(p.direct_install);
+        assert!(p.out_dir.is_none(), "--out-dir defaults to None");
+    }
+
+    #[test]
+    fn parse_args_accepts_out_dir_long_form() {
+        let argv = vec![
+            String::from("--direct-install"),
+            String::from("--out-dir"),
+            String::from("/tmp/aegis-out"),
+        ];
+        let p = parse_args(&argv).unwrap();
+        assert!(p.direct_install);
+        assert_eq!(p.out_dir, Some(PathBuf::from("/tmp/aegis-out")));
+    }
+
+    #[test]
+    fn parse_args_accepts_out_dir_eq_form() {
+        let argv = vec![String::from("--out-dir=/tmp/x")];
+        let p = parse_args(&argv).unwrap();
+        assert_eq!(p.out_dir, Some(PathBuf::from("/tmp/x")));
+    }
+
+    #[test]
+    fn flash_error_direct_install_renders_stage_and_detail() {
+        use crate::userfacing::UserFacing;
+        let e = FlashError::DirectInstall {
+            stage: DirectInstallStage::FormatEsp,
+            detail: "mkfs.fat exited 1".to_string(),
+        };
+        assert_eq!(e.code(), Some("FLASH_DIRECT_INSTALL"));
+        assert_eq!(e.summary(), "direct-install pipeline failed");
+        assert_eq!(e.detail(), "mkfs.fat exited 1");
+        let s = e.suggestion().unwrap();
+        // Format/partition-stage suggestions mention the re-run path.
+        assert!(s.contains("Re-run") || s.contains("re-run"));
+    }
+
+    #[test]
+    fn flash_error_direct_install_setup_stage_recommends_preflight_check() {
+        use crate::userfacing::UserFacing;
+        let e = FlashError::DirectInstall {
+            stage: DirectInstallStage::Setup,
+            detail: "create work dir failed".to_string(),
+        };
+        let s = e.suggestion().unwrap();
+        assert!(
+            s.contains("untouched"),
+            "setup stage should reassure operator stick is untouched"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn partition_path_handles_scsi_and_nvme() {
+        use std::path::Path;
+        assert_eq!(
+            partition_path(Path::new("/dev/sda"), 1),
+            PathBuf::from("/dev/sda1")
+        );
+        assert_eq!(
+            partition_path(Path::new("/dev/sda"), 2),
+            PathBuf::from("/dev/sda2")
+        );
+        assert_eq!(
+            partition_path(Path::new("/dev/nvme0n1"), 1),
+            PathBuf::from("/dev/nvme0n1p1")
+        );
+        assert_eq!(
+            partition_path(Path::new("/dev/mmcblk0"), 2),
+            PathBuf::from("/dev/mmcblk0p2")
+        );
+        assert_eq!(
+            partition_path(Path::new("/dev/loop0"), 1),
+            PathBuf::from("/dev/loop0p1")
+        );
     }
 }
