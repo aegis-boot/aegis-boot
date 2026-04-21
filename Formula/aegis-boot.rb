@@ -4,12 +4,13 @@
 #   brew tap williamzujkowski/aegis-boot https://github.com/williamzujkowski/aegis-boot
 #   brew install aegis-boot
 #
-# Cross-platform support: Linux/x86_64 only today. macOS, Windows,
-# and Linux/aarch64 builds are tracked under #123 and #137.
+# Cross-platform support: Linux x86_64 + macOS Apple Silicon (arm64)
+# are shipped as of v0.16.0 (#365 Phase A1 + A3). macOS Intel, Windows,
+# and Linux aarch64 remain open under #365 / #367.
 class AegisBoot < Formula
   desc "Signed UEFI Secure Boot rescue environment for booting any ISO from USB"
   homepage "https://github.com/williamzujkowski/aegis-boot"
-  version "0.15.0"
+  version "0.16.0"
   license any_of: ["Apache-2.0", "MIT"]
 
   # Runtime dependencies the operator CLI shells out to. Listed
@@ -22,64 +23,75 @@ class AegisBoot < Formula
 
   on_linux do
     on_intel do
-      url "https://github.com/williamzujkowski/aegis-boot/releases/download/v0.15.0/aegis-boot-x86_64-linux"
-      sha256 "cae7fae1b70e8d7576be83f86036eac91c53cfc7397f7f98a92332bbb17467d6"
+      url "https://github.com/williamzujkowski/aegis-boot/releases/download/v0.16.0/aegis-boot-x86_64-linux"
+      sha256 "PLACEHOLDER_LINUX_X86_64_SHA"
+    end
+  end
+
+  on_macos do
+    on_arm do
+      url "https://github.com/williamzujkowski/aegis-boot/releases/download/v0.16.0/aegis-boot-aarch64-apple-darwin"
+      sha256 "PLACEHOLDER_MACOS_ARM64_SHA"
     end
   end
 
   def install
     if OS.linux? && Hardware::CPU.intel?
       bin.install "aegis-boot-x86_64-linux" => "aegis-boot"
-      # GitHub release downloads come in without the exec bit; bin.install
-      # preserves the source mode. brew's final `test do` phase runs through
-      # a shell that sets 0755 implicitly, but the install-time
-      # generate_completions_from_executable invocation needs the bit set
-      # now. Mode 0555 matches what brew would land with post-install
-      # (read+exec for everyone, no write).
-      (bin/"aegis-boot").chmod 0555
-
-      # Generate completions + man page only when the installed binary
-      # supports them. `completions` + `man` subcommands shipped in
-      # #207 / #211 (post-v0.13.0); pinning to an older tag means these
-      # subcommands exit 2 with "unknown command", which would fail the
-      # install. Probe via `--help` — grep-on-help is more reliable than
-      # semver-parse against a floating --version format.
-      help_output = Utils.safe_popen_read(bin/"aegis-boot", "--help")
-      if help_output.include?("completions")
-        # `shells:` constrains to the two we support — `completions fish`
-        # would exit 2 otherwise and fail the install.
-        generate_completions_from_executable(
-          bin/"aegis-boot", "completions", shells: [:bash, :zsh]
-        )
-      end
-
-      if help_output.include?("aegis-boot man")
-        # Emit the man page from the same binary (self-contained via
-        # include_str! in crates/aegis-cli/src/man.rs). Homebrew has no
-        # built-in `generate_man_from_executable`, so shell-out to the
-        # binary and install the result.
-        (buildpath/"aegis-boot.1").write(Utils.safe_popen_read(bin/"aegis-boot", "man"))
-        man1.install "aegis-boot.1"
-      end
+    elsif OS.mac? && Hardware::CPU.arm?
+      bin.install "aegis-boot-aarch64-apple-darwin" => "aegis-boot"
     else
       odie <<~EOS
-        aegis-boot binaries are currently published only for Linux x86_64.
+        aegis-boot binaries are currently published for:
+          - Linux x86_64
+          - macOS Apple Silicon (arm64)
 
-        Cross-platform support is tracked in:
-          https://github.com/williamzujkowski/aegis-boot/issues/123
-          https://github.com/williamzujkowski/aegis-boot/issues/137
+        Support for macOS Intel, Windows, and Linux aarch64 is tracked in:
+          https://github.com/williamzujkowski/aegis-boot/issues/365
+          https://github.com/williamzujkowski/aegis-boot/issues/367
 
-        Build from source today:
+        If you're on one of the unsupported arches, build from source:
           git clone https://github.com/williamzujkowski/aegis-boot
           cd aegis-boot
           cargo install --path crates/aegis-cli
       EOS
     end
+
+    # GitHub release downloads come in without the exec bit; bin.install
+    # preserves the source mode. Mode 0555 matches what brew would land
+    # with post-install (read+exec for everyone, no write).
+    (bin/"aegis-boot").chmod 0555
+
+    # Generate completions + man page only when the installed binary
+    # supports them. `completions` + `man` subcommands shipped in
+    # #207 / #211 (post-v0.13.0); probing via `--help` is more reliable
+    # than semver-parse against a floating --version format.
+    help_output = Utils.safe_popen_read(bin/"aegis-boot", "--help")
+    if help_output.include?("completions")
+      # `shells:` constrains to the two we support — `completions fish`
+      # would exit 2 otherwise and fail the install.
+      generate_completions_from_executable(
+        bin/"aegis-boot", "completions", shells: [:bash, :zsh]
+      )
+    end
+
+    if help_output.include?("aegis-boot man")
+      # Emit the man page from the same binary (self-contained via
+      # include_str! in crates/aegis-cli/src/man.rs). Homebrew has no
+      # built-in `generate_man_from_executable`, so shell-out and install.
+      (buildpath/"aegis-boot.1").write(Utils.safe_popen_read(bin/"aegis-boot", "man"))
+      man1.install "aegis-boot.1"
+    end
   end
 
   def caveats
+    binary_name = if OS.mac? && Hardware::CPU.arm?
+      "aegis-boot-aarch64-apple-darwin"
+    else
+      "aegis-boot-x86_64-linux"
+    end
     <<~EOS
-      aegis-boot is a USB-imaging tool intended for Linux operator workstations.
+      aegis-boot is a USB-imaging tool for Linux + macOS operator workstations.
 
       Quick start:
         aegis-boot doctor              # check host + stick health
@@ -95,9 +107,9 @@ class AegisBoot < Formula
         cosign verify-blob \\
           --certificate-identity-regexp '^https://github\\.com/williamzujkowski/aegis-boot/.+@refs/tags/v.+$' \\
           --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \\
-          --signature aegis-boot-x86_64-linux.sig \\
-          --certificate aegis-boot-x86_64-linux.pem \\
-          aegis-boot-x86_64-linux
+          --signature #{binary_name}.sig \\
+          --certificate #{binary_name}.pem \\
+          #{binary_name}
       (download .sig + .pem from the same release)
     EOS
   end
