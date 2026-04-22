@@ -884,7 +884,7 @@ fn check_aegis_isos_mount(report: &mut Report, dev: &Path) {
             None
         }
     });
-    if mount_point.is_none() {
+    let Some(mp) = mount_point else {
         report.add(
             Verdict::Skip,
             name,
@@ -894,52 +894,211 @@ fn check_aegis_isos_mount(report: &mut Report, dev: &Path) {
             ),
         );
         return;
-    }
-    let mp = mount_point.unwrap_or_else(|| unreachable!());
-    let entries = std::fs::read_dir(&mp);
-    let Ok(entries) = entries else {
+    };
+
+    // #274 Phase 6b: emit per-ISO trust-state rows using the same
+    // recursive scan rescue-tui + `aegis-boot list` use (Phase 6a).
+    // Shape is one umbrella row ("AEGIS_ISOS trust coverage") giving
+    // the count summary, plus one `[GREEN/YELLOW/RED] <folder/iso>`
+    // row per ISO so operators see exactly which stick contents will
+    // show which verdict in rescue-tui.
+    let mount_path = Path::new(&mp);
+    let isos = crate::inventory::scan_isos(mount_path);
+    render_aegis_isos_trust_coverage(report, &mp, &isos, dev);
+}
+
+/// Pure-ish trust-coverage row renderer. Extracted so
+/// `check_aegis_isos_mount` stays under the 100-line budget AND so
+/// the per-ISO row classification is unit-testable against a slice
+/// of `IsoEntry` without touching the filesystem.
+fn render_aegis_isos_trust_coverage(
+    report: &mut Report,
+    mount_display: &str,
+    isos: &[crate::inventory::IsoEntry],
+    dev: &Path,
+) {
+    let umbrella = "AEGIS_ISOS trust coverage".to_string();
+
+    if isos.is_empty() {
         report.add_with_next(
-            Verdict::Fail,
-            name,
-            format!("can't read {mp} (permissions?)"),
-            format!("try `sudo aegis-boot list {}`", dev.display()),
+            Verdict::Warn,
+            umbrella,
+            format!("{mount_display} has no .iso files yet"),
+            "add an ISO with `aegis-boot add /path/to/distro.iso` or a catalog slug (#352 UX-4)",
         );
         return;
-    };
-    let mut iso_count = 0;
-    let mut sidecar_count = 0;
-    for e in entries.flatten() {
-        let n = e.file_name().to_string_lossy().to_lowercase();
-        if Path::new(&n).extension().is_some_and(|x| x == "iso") {
-            iso_count += 1;
-        } else if n.ends_with(".sha256") || n.ends_with(".minisig") {
-            sidecar_count += 1;
-        }
     }
-    match (iso_count, sidecar_count) {
-        (0, _) => report.add_with_next(
-            Verdict::Warn,
-            name,
-            format!("{mp} has no .iso files yet"),
-            "add an ISO with `aegis-boot add /path/to/distro.iso`",
-        ),
-        (n, 0) => report.add_with_next(
-            Verdict::Warn,
-            name,
-            format!("{n} ISO(s), no sidecars — TUI will show GRAY verdict"),
-            "drop sibling .sha256 or .minisig files alongside each ISO before flashing",
-        ),
-        (n, s) => report.add(
-            Verdict::Pass,
-            name,
-            format!("{n} ISO(s), {s} sidecar(s) — verifications can run"),
-        ),
+
+    let green = isos
+        .iter()
+        .filter(|e| e.has_sha256 && e.has_minisig)
+        .count();
+    let yellow = isos
+        .iter()
+        .filter(|e| e.has_sha256 && !e.has_minisig)
+        .count();
+    let red = isos.iter().filter(|e| !e.has_sha256).count();
+
+    let summary_verdict = if red > 0 || yellow > 0 {
+        Verdict::Warn
+    } else {
+        Verdict::Pass
+    };
+    let summary_detail = format!(
+        "{} ISO(s): {green} GREEN (sha256+minisig), {yellow} YELLOW (sha256 only), {red} RED (no sidecars)",
+        isos.len()
+    );
+    if red > 0 || yellow > 0 {
+        report.add_with_next(
+            summary_verdict,
+            umbrella,
+            summary_detail,
+            format!(
+                "RED ISOs trigger typed-boot confirm in rescue-tui; drop sibling \
+                 .sha256 + .minisig next to each ISO on {} to clear",
+                dev.display()
+            ),
+        );
+    } else {
+        report.add(summary_verdict, umbrella, summary_detail);
+    }
+
+    for entry in isos {
+        let verdict = classify_trust_state(entry);
+        let path = match &entry.folder {
+            Some(f) => format!("{f}/{}", entry.name),
+            None => entry.name.clone(),
+        };
+        let sidecars = match (entry.has_sha256, entry.has_minisig) {
+            (true, true) => "sha256 + minisig",
+            (true, false) => "sha256 only (no minisig)",
+            (false, true) => "minisig only (no sha256)",
+            (false, false) => "no sidecars — rescue-tui will show GRAY verdict",
+        };
+        report.add(verdict, format!("  {path}"), sidecars);
+    }
+}
+
+/// Trust-state classification for a single ISO:
+/// - GREEN (Pass): both `.sha256` and `.minisig` sidecars present
+/// - YELLOW (Warn): one sidecar present (usually `.sha256`, occasionally `.minisig`)
+/// - RED (Fail): neither sidecar — rescue-tui shows GRAY and requires typed 'boot'
+fn classify_trust_state(entry: &crate::inventory::IsoEntry) -> Verdict {
+    match (entry.has_sha256, entry.has_minisig) {
+        (true, true) => Verdict::Pass,
+        (true, false) | (false, true) => Verdict::Warn,
+        (false, false) => Verdict::Fail,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inventory::IsoEntry;
+
+    // ---- #274 Phase 6b: trust-state classification ------------------------
+
+    #[test]
+    fn classify_trust_state_green_requires_both_sidecars() {
+        let e = IsoEntry::new_for_test("ubuntu.iso", None, true, true);
+        assert_eq!(classify_trust_state(&e), Verdict::Pass);
+    }
+
+    #[test]
+    fn classify_trust_state_yellow_for_sha256_only() {
+        let e = IsoEntry::new_for_test("alpine.iso", None, true, false);
+        assert_eq!(classify_trust_state(&e), Verdict::Warn);
+    }
+
+    #[test]
+    fn classify_trust_state_yellow_for_minisig_only() {
+        // Operator may have dropped a minisig without the sha256;
+        // symmetrically YELLOW, same as sha256-only.
+        let e = IsoEntry::new_for_test("debian.iso", None, false, true);
+        assert_eq!(classify_trust_state(&e), Verdict::Warn);
+    }
+
+    #[test]
+    fn classify_trust_state_red_when_no_sidecars() {
+        let e = IsoEntry::new_for_test("random.iso", None, false, false);
+        assert_eq!(classify_trust_state(&e), Verdict::Fail);
+    }
+
+    #[test]
+    fn render_trust_coverage_emits_warn_when_empty_isos_list() {
+        // Empty stick — expected umbrella Warn row telling operator
+        // to add an ISO. No per-ISO rows.
+        let mut r = Report::new().with_json_mode(true);
+        render_aegis_isos_trust_coverage(&mut r, "/mnt/aegis", &[], Path::new("/dev/sdx"));
+        assert_eq!(r.rows.len(), 1);
+        let (verdict, name, _detail) = &r.rows[0];
+        assert_eq!(*verdict, Verdict::Warn);
+        assert!(name.contains("AEGIS_ISOS trust coverage"));
+    }
+
+    #[test]
+    fn render_trust_coverage_green_summary_when_all_sidecars_present() {
+        let isos = vec![
+            IsoEntry::new_for_test("a.iso", Some("ubuntu-24.04".into()), true, true),
+            IsoEntry::new_for_test("b.iso", None, true, true),
+        ];
+        let mut r = Report::new().with_json_mode(true);
+        render_aegis_isos_trust_coverage(&mut r, "/mnt", &isos, Path::new("/dev/sdx"));
+        // 1 summary row + 2 per-ISO rows = 3 total
+        assert_eq!(r.rows.len(), 3);
+        assert_eq!(r.rows[0].0, Verdict::Pass);
+        assert!(r.rows[0].2.contains("2 GREEN"));
+        assert_eq!(r.rows[1].0, Verdict::Pass);
+        assert_eq!(r.rows[2].0, Verdict::Pass);
+    }
+
+    #[test]
+    fn render_trust_coverage_per_iso_rows_use_folder_slash_name_path() {
+        let isos = vec![
+            IsoEntry::new_for_test("server.iso", Some("ubuntu-24.04".into()), true, true),
+            IsoEntry::new_for_test("desktop.iso", None, false, false),
+        ];
+        let mut r = Report::new().with_json_mode(true);
+        render_aegis_isos_trust_coverage(&mut r, "/mnt", &isos, Path::new("/dev/sdx"));
+        // Check that the ubuntu-24.04/server.iso row uses the folder prefix
+        let Some(subfolder_row) = r
+            .rows
+            .iter()
+            .find(|(_, name, _)| name.contains("ubuntu-24.04/server.iso"))
+        else {
+            panic!(
+                "expected a row for ubuntu-24.04/server.iso, got {:?}",
+                r.rows
+            );
+        };
+        assert_eq!(subfolder_row.0, Verdict::Pass);
+        // Root-level ISO renders without a folder prefix
+        let Some(root_row) = r
+            .rows
+            .iter()
+            .find(|(_, name, _)| name.trim() == "desktop.iso")
+        else {
+            panic!("expected a row for desktop.iso, got {:?}", r.rows);
+        };
+        assert_eq!(root_row.0, Verdict::Fail);
+    }
+
+    #[test]
+    fn render_trust_coverage_mixed_summary_is_warn_with_next_action() {
+        // One green + one yellow + one red → overall Warn + next_action
+        // set so the operator sees exactly what to fix.
+        let isos = vec![
+            IsoEntry::new_for_test("ok.iso", None, true, true),
+            IsoEntry::new_for_test("partial.iso", None, true, false),
+            IsoEntry::new_for_test("bad.iso", None, false, false),
+        ];
+        let mut r = Report::new().with_json_mode(true);
+        render_aegis_isos_trust_coverage(&mut r, "/mnt", &isos, Path::new("/dev/sdx"));
+        assert_eq!(r.rows[0].0, Verdict::Warn);
+        assert!(r.rows[0].2.contains("1 GREEN"));
+        assert!(r.rows[0].2.contains("1 YELLOW"));
+        assert!(r.rows[0].2.contains("1 RED"));
+    }
 
     #[test]
     fn report_score_all_pass_is_100() {
