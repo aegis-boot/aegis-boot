@@ -827,14 +827,17 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = std::env::var_os("XDG_DATA_HOME");
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: ENV_MUTEX serializes env-mutating tests in this module; #[cfg(test)] only.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe { std::env::set_var("XDG_DATA_HOME", "/tmp/aegis-test-xdg-data") };
         let p = data_dir();
         assert_eq!(p, PathBuf::from("/tmp/aegis-test-xdg-data/aegis-boot"));
         match prev {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: ENV_MUTEX serializes env-mutating tests in this module; #[cfg(test)] only.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             Some(v) => unsafe { std::env::set_var("XDG_DATA_HOME", v) },
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: ENV_MUTEX serializes env-mutating tests in this module; #[cfg(test)] only.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             None => unsafe { std::env::remove_var("XDG_DATA_HOME") },
         }
     }
@@ -846,9 +849,11 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev_xdg = std::env::var_os("XDG_DATA_HOME");
         let prev_home = std::env::var_os("HOME");
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: ENV_MUTEX serializes env-mutating tests in this module; #[cfg(test)] only.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe { std::env::remove_var("XDG_DATA_HOME") };
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: ENV_MUTEX serializes env-mutating tests in this module; #[cfg(test)] only.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe { std::env::set_var("HOME", "/tmp/aegis-test-home2") };
         let p = data_dir();
         assert_eq!(
@@ -856,15 +861,19 @@ mod tests {
             PathBuf::from("/tmp/aegis-test-home2/.local/share/aegis-boot")
         );
         match prev_xdg {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: ENV_MUTEX serializes env-mutating tests in this module; #[cfg(test)] only.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             Some(v) => unsafe { std::env::set_var("XDG_DATA_HOME", v) },
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: ENV_MUTEX serializes env-mutating tests in this module; #[cfg(test)] only.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             None => unsafe { std::env::remove_var("XDG_DATA_HOME") },
         }
         match prev_home {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: ENV_MUTEX serializes env-mutating tests in this module; #[cfg(test)] only.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             Some(v) => unsafe { std::env::set_var("HOME", v) },
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: ENV_MUTEX serializes env-mutating tests in this module; #[cfg(test)] only.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             None => unsafe { std::env::remove_var("HOME") },
         }
     }
