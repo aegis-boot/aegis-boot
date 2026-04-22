@@ -1,6 +1,7 @@
 # aegis-boot → aegis-boot/ org migration plan
 
-**Status:** Draft — maintainer-executed checklist (no automation).
+**Status:** APPROVED (consensus vote 2026-04-22, 80% supermajority). Maintainer-executed checklist; no bot automation.
+**Vote record:** rev 1 rejected at 60% (Gemini surfaced OIDC discontinuity + crates.io squatter race); rev 2 (PR #389) added §1 crates.io pre-registration + §6.3 OIDC identity bridge; rev 2 passed at 80%. Architect ✓88%, Security ✓95% (flipped from rev-1 REJECT), DevEx ✓87%, PM ✓88%, AI/ML abstained (95%), Contrarian ✗95% (operational nitpicks not security-blocking). Verification hashes in PR #389.
 **Scope:** Move `github.com/williamzujkowski/aegis-boot` and `github.com/williamzujkowski/aegis-hwsim` under a new GitHub Organization at `github.com/aegis-boot`.
 **Maintainer:** William Zujkowski (solo). Federal employee — uses **Individual** Apple Developer Program; does NOT register a business entity.
 **Org name verified available:** 2026-04-22 — re-verified (`github.com/aegis-boot` → HTTP 404).
