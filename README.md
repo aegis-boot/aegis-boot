@@ -69,6 +69,10 @@ curl -sSL https://raw.githubusercontent.com/aegis-boot/aegis-boot/main/scripts/i
 brew tap aegis-boot/aegis-boot https://github.com/aegis-boot/aegis-boot
 brew install aegis-boot
 
+# OR on NixOS / with Nix installed:
+nix run github:aegis-boot/aegis-boot -- flash /dev/sdX --yes
+# Or persist: nix profile install github:aegis-boot/aegis-boot
+
 # Or pin a version: sh install.sh --version v0.15.0
 # Or skip cosign (NOT recommended): sh install.sh --no-verify
 # Build from source: see BUILDING.md.

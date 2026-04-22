@@ -61,6 +61,38 @@ What works on macOS today: `aegis-boot list`, `aegis-boot doctor`, drive detecti
 
 macOS x86_64 (Intel) and Windows native builds remain deferred — see [#365](https://github.com/aegis-boot/aegis-boot/issues/365) for the full cross-platform roadmap.
 
+### NixOS / Nix
+
+aegis-boot ships a Nix flake. The `aegis-bootctl` derivation bakes the runtime tools (`sgdisk`, `mkfs.fat`, `mkfs.exfat`, `mcopy`, `curl`, `gnupg`) into the binary's PATH via `makeWrapper`, so there's nothing to install separately:
+
+```bash
+# One-shot run (no persistent install):
+nix run github:aegis-boot/aegis-boot -- flash /dev/sdX --yes
+
+# Persistent user install:
+nix profile install github:aegis-boot/aegis-boot
+aegis-boot --version
+```
+
+Or consume from a system flake:
+
+```nix
+# flake.nix
+{
+  inputs.aegis-boot.url = "github:aegis-boot/aegis-boot";
+  outputs = { self, nixpkgs, aegis-boot, ... }: {
+    nixosConfigurations.mymachine = nixpkgs.lib.nixosSystem {
+      modules = [
+        aegis-boot.nixosModules.aegis-boot
+        { programs.aegis-boot.enable = true; }
+      ];
+    };
+  };
+}
+```
+
+The flake pins to `nixos-unstable`; downgrade to a specific channel in your own system flake if you want a frozen snapshot. Cosign verification of the binary is not currently wired through the Nix build (the flake builds from source instead of verifying a signed release artifact) — if that matters for your threat model, use the `install.sh` path + `nix-ld`.
+
 Sanity check:
 
 ```bash
