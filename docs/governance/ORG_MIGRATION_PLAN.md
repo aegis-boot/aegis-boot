@@ -3,8 +3,32 @@
 **Status:** Draft — maintainer-executed checklist (no automation).
 **Scope:** Move `github.com/williamzujkowski/aegis-boot` and `github.com/williamzujkowski/aegis-hwsim` under a new GitHub Organization at `github.com/aegis-boot`.
 **Maintainer:** William Zujkowski (solo). Federal employee — uses **Individual** Apple Developer Program; does NOT register a business entity.
-**Org name verified available:** 2026-04-21 (`github.com/aegis-boot` → 404).
+**Org name verified available:** 2026-04-22 — re-verified (`github.com/aegis-boot` → HTTP 404).
 **Plan legend:** [UI] = browser click-through • [CLI] = terminal command • [LOCAL] = local repo edit.
+
+## Naming-conflict research (re-run 2026-04-22)
+
+| Registry | Name | Status | Notes |
+|---|---|---|---|
+| GitHub org | `aegis-boot` | **AVAILABLE** | HTTP 404 confirmed |
+| GitHub org | `aegisboot` | AVAILABLE | backup if hyphenated form is unexpectedly taken |
+| GitHub user | `Aegis` | exists (unrelated) | different user, case-insensitive distinct from `aegis-boot` |
+| GitHub org | `Aegisub` | exists (unrelated) | subtitle editor, different domain |
+| GitHub org | `aegis-aead` | exists (unrelated) | AEAD cipher library, different domain |
+| GitHub org | `aegiswp` | exists (unrelated) | WordPress plugin, different domain |
+| crates.io | `aegis-boot` | **AVAILABLE** | |
+| crates.io | `aegis-cli` | **AVAILABLE** | |
+| crates.io | `aegis-wire-formats` | **AVAILABLE** | |
+| crates.io | `aegis-fitness` | **AVAILABLE** | |
+| crates.io | `aegis-hwsim` | **AVAILABLE** | |
+| crates.io | `iso-parser` | **AVAILABLE** | |
+| crates.io | `iso-probe` | **AVAILABLE** | |
+| crates.io | `kexec-loader` | **AVAILABLE** | |
+| Docker Hub | `aegis-boot` | AVAILABLE | not actively used by this project |
+| npm | `aegis-boot` | AVAILABLE | not actively used (no JS surface) |
+| npm | `aegis-cli` | **TAKEN** (unrelated) | "editorconfig for AI agents"; no collision — we don't publish JS |
+
+**Conclusion:** no blocking naming conflicts across any registry we target. The GitHub org slug + all 8 crates.io names the project currently uses are free to claim post-transfer.
 
 ---
 
@@ -124,7 +148,39 @@ All paths below are relative to `https://github.com/organizations/aegis-boot/set
 
 ### 5.2 Downstream hardcoded references — LOCAL edits, open as follow-up PRs
 
-Every path below is **relative to `/home/william/git/aegis-boot/`** unless noted.
+#### 5.2.0 One-shot sweep script (recommended first step)
+
+After the transfer completes, run the automated sweep script instead of hand-editing every file:
+
+```bash
+cd /home/william/git/aegis-boot
+
+# 1. Dry-run — inspect what would change.
+./scripts/org-migration-sweep.sh
+
+# 2. When the dry-run output looks right, write in place.
+./scripts/org-migration-sweep.sh --write
+
+# 3. Review the diff.
+git diff
+
+# 4. Verify nothing remains (CI-runnable; exits 1 on any remaining legacy URL).
+./scripts/org-migration-sweep.sh --check
+
+# 5. Commit + push + open PR.
+git checkout -b chore/365-post-transfer-url-sweep
+git add -u
+git commit -m "chore(org): sweep legacy williamzujkowski/aegis-* URLs to aegis-boot/"
+git push -u origin chore/365-post-transfer-url-sweep
+```
+
+The sweep covers `.md`, `.rs`, `.toml`, `.yml`, `.yaml`, `.sh`, `.rb` files and deliberately **excludes** `CHANGELOG.md` (historical entries keep their original URLs — those releases were signed under the legacy cosign identity and forensic back-references to those releases remain correct).
+
+As of 2026-04-22, the sweep reports **169 matches across 56 files** that would be rewritten. The hand-edit tables in §5.2.1 + §5.2.2 below are the fallback manual path if the sweep is ever insufficient (new file types, special-cased contexts). Under normal operation the sweep is complete.
+
+#### 5.2.1 Critical files — cosign + operator install paths
+
+The sweep handles these in one pass; this table is the eyes-on list for post-sweep review — these are the paths where a bad substitution breaks operator-facing verification.
 
 - [ ] **[LOCAL]** `Cargo.toml` line 26: `repository = "https://github.com/williamzujkowski/aegis-boot"` → `https://github.com/aegis-boot/aegis-boot`.
 - [ ] **[LOCAL]** `scripts/install.sh`:
