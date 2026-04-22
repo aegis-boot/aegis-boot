@@ -1343,7 +1343,13 @@ mod tests {
                 return;
             }
         }
-        let tmp = std::env::temp_dir().join(format!("aegis-update-phase1-{}", std::process::id()));
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        // test-only: tempdir for synthesizing a FAT32 image + running
+        // mtype against it. pid-suffixed, test-scope, test cleans up
+        // at the end of its own body. Not a security boundary — same
+        // pattern as flash.rs:617 for direct-install's work dir.
+        let tmp_root = std::env::temp_dir();
+        let tmp = tmp_root.join(format!("aegis-update-phase1-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).expect("mkdir tmp");
         let img = tmp.join("esp.img");
         // 4 MiB FAT32 image — smallest that mkfs.vfat will format
