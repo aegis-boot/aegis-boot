@@ -23,7 +23,7 @@ on:
 #   - kexec-loader    (kexec_file_load FFI wrapper)
 #
 # Non-publishable (intentional):
-#   - rescue-tui, aegis-fitness, aegis-cli, aegis-wire-formats
+#   - rescue-tui, aegis-fitness, aegis-bootctl, aegis-wire-formats
 #   — all repo-specific or binary crates.
 
 jobs:

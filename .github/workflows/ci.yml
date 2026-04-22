@@ -53,18 +53,18 @@ jobs:
       - name: Format + lint aegis-cli
         run: |
           cargo fmt --check
-          cargo clippy -p aegis-cli --all-targets -- -D warnings
+          cargo clippy -p aegis-bootctl --all-targets -- -D warnings
       - name: Run aegis-cli tests
-        run: cargo test -p aegis-cli --locked
+        run: cargo test -p aegis-bootctl --locked
       - name: Cross-compile check for macOS
         # Build-only gate. Confirms cross-platform flash code compiles
         # for x86_64-apple-darwin; runtime macOS behavior is covered
         # by fixture-based parser tests.
-        run: cargo check -p aegis-cli --target x86_64-apple-darwin --all-targets
+        run: cargo check -p aegis-bootctl --target x86_64-apple-darwin --all-targets
       - name: Cross-compile check for Windows
         # Same rationale as macOS: Windows detect code compiles, its
         # PowerShell-output parser is exercised via committed fixtures.
-        run: cargo check -p aegis-cli --target x86_64-pc-windows-gnu --all-targets
+        run: cargo check -p aegis-bootctl --target x86_64-pc-windows-gnu --all-targets
 
   fitness:
     name: aegis-fitness audit
@@ -184,7 +184,7 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install 1.85.0 --profile minimal && rustup override set 1.85.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo run -p aegis-cli --bin constants-docgen --features docgen --locked -- --check
+      - run: cargo run -p aegis-bootctl --bin constants-docgen --features docgen --locked -- --check
 
   # CLI subcommand + synopsis drift-check (Phase 3a + 3b of #289 / #286).
   # Phase 3a: validates every dispatch-table subcommand has a
@@ -203,9 +203,9 @@ jobs:
         run: rustup toolchain install 1.85.0 --profile minimal && rustup override set 1.85.0
       - uses: Swatinem/rust-cache@v2
       - name: Build aegis-boot binary
-        run: cargo build -p aegis-cli --release --locked
+        run: cargo build -p aegis-bootctl --release --locked
       - name: Check CLI doc drift
-        run: cargo run -p aegis-cli --bin cli-docgen --features docgen --locked -- --check
+        run: cargo run -p aegis-bootctl --bin cli-docgen --features docgen --locked -- --check
 
   # Attestation-manifest JSON schema drift-check (Phase 4a of #290 / #286).
   # Runs `aegis-wire-formats-schema-docgen --check` which regenerates the

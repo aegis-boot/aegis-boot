@@ -92,7 +92,7 @@ jobs:
         run: |
           cargo build --release --locked \
             --target x86_64-unknown-linux-musl \
-            -p aegis-cli
+            -p aegis-bootctl
           mkdir -p out
           cp target/x86_64-unknown-linux-musl/release/aegis-boot \
             out/aegis-boot-x86_64-linux
@@ -351,7 +351,7 @@ jobs:
         run: |
           cargo build --release --locked \
             --target aarch64-apple-darwin \
-            -p aegis-cli
+            -p aegis-bootctl
           mkdir -p out
           cp target/aarch64-apple-darwin/release/aegis-boot \
             out/aegis-boot-aarch64-apple-darwin

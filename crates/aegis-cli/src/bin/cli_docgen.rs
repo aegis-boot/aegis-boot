@@ -279,7 +279,7 @@ fn find_aegis_boot_bin(
     }
     Err(format!(
         "cli-docgen: cannot find built aegis-boot binary; looked at {} and {}. \
-         Run `cargo build -p aegis-cli` first, or pass --aegis-boot-bin PATH.",
+         Run `cargo build -p aegis-bootctl` first, or pass --aegis-boot-bin PATH.",
         candidates[0].display(),
         candidates[1].display()
     ))
@@ -329,7 +329,7 @@ fn render_synopsis(helps: &BTreeMap<String, String>) -> String {
         "This file is auto-generated from the live output of `aegis-boot <SUBCOMMAND> --help` — it is the authoritative usage + flags reference. For prose guides, examples, and exit-code narratives, see [`docs/CLI.md`](../CLI.md).\n\n",
     );
     out.push_str("Phase 3b of [#286](https://github.com/aegis-boot/aegis-boot/issues/286). Regenerate with:\n\n");
-    out.push_str("```bash\ncargo build -p aegis-cli --release\ncargo run -p aegis-cli --bin cli-docgen --features docgen -- --write\n```\n\n");
+    out.push_str("```bash\ncargo build -p aegis-bootctl --release\ncargo run -p aegis-bootctl --bin cli-docgen --features docgen -- --write\n```\n\n");
     out.push_str("---\n\n");
     for (sub, help) in helps {
         writeln!(out, "## `aegis-boot {sub}`\n").expect("writing to String never fails");
@@ -487,7 +487,7 @@ fn main() -> ExitCode {
                 "Fix list drift: add a `## `aegis-boot X`` heading to docs/CLI.md and a `.TP` entry to man/aegis-boot.1.in for each missing subcommand (or remove from SUBCOMMANDS)."
             );
             eprintln!(
-                "Fix synopsis drift: run `cargo run -p aegis-cli --bin cli-docgen --features docgen -- --write` locally and commit."
+                "Fix synopsis drift: run `cargo run -p aegis-bootctl --bin cli-docgen --features docgen -- --write` locally and commit."
             );
             ExitCode::from(1)
         }

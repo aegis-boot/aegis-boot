@@ -7,8 +7,8 @@ This file is auto-generated from the live output of `aegis-boot <SUBCOMMAND> --h
 Phase 3b of [#286](https://github.com/aegis-boot/aegis-boot/issues/286). Regenerate with:
 
 ```bash
-cargo build -p aegis-cli --release
-cargo run -p aegis-cli --bin cli-docgen --features docgen -- --write
+cargo build -p aegis-bootctl --release
+cargo run -p aegis-bootctl --bin cli-docgen --features docgen -- --write
 ```
 
 ---

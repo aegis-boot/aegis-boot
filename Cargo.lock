@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "aegis-cli"
+name = "aegis-bootctl"
 version = "0.15.0"
 dependencies = [
  "aegis-wire-formats",
