@@ -12,6 +12,21 @@ license.workspace = true
 repository.workspace = true
 description = "Operator CLI for aegis-boot — flash, add, list, verify"
 
+# Files included in the published tarball. Default cargo behavior
+# packages everything under `crates/aegis-cli/`; we explicitly include
+# the staged man template + CHANGELOG that scripts/publish-if-new.sh
+# copies in pre-publish (build.rs reads them at package-build time
+# via the `first_existing` fallback). Without this, `cargo publish`
+# packages the crate and build.rs panics on missing `../../man/...`.
+include = [
+    "src/**/*",
+    "build.rs",
+    "Cargo.toml",
+    "Cargo.lock",
+    "man/aegis-boot.1.in",
+    "CHANGELOG.md",
+]
+
 [[bin]]
 name = "aegis-boot"
 path = "src/main.rs"
@@ -42,11 +57,11 @@ docgen = []
 [dependencies]
 serde = { workspace = true }
 serde_json = "1.0"
-iso-probe = { path = "../iso-probe" }
+iso-probe = { path = "../iso-probe", version = "0.16" }
 # Signed attestation manifest types extracted for Phase 4a of #286.
 # This crate is the Rust + JSON Schema source of truth for the
 # on-disk aegis-boot-manifest.json wire format.
-aegis-wire-formats = { path = "../aegis-wire-formats" }
+aegis-wire-formats = { path = "../aegis-wire-formats", version = "0.16" }
 # Atomic random-name temp files for write_sidecar_via_sudo's
 # stage-then-copy path. Use the runtime dep (not the dev-dep) so the
 # staging path is not predictable — closes the TOCTOU window semgrep
