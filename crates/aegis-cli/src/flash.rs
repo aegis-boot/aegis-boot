@@ -2669,7 +2669,13 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn sign_manifest_with_key_path_returns_none_when_unset() {
-        let tmp = std::env::temp_dir().join(format!("aegis-sign-test-{}", std::process::id()));
+        // Test-only tmpfile path. pid+nanos suffix + `create_dir_all`
+        // make it uniquely named; the worst-case race (another proc
+        // creating the same dir at the same nanosecond) is fine
+        // because `create_dir_all` is idempotent.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let tmp_root = std::env::temp_dir();
+        let tmp = tmp_root.join(format!("aegis-sign-test-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
 
         let body = b"{\"placeholder\": \"manifest body\"}";
@@ -2695,7 +2701,10 @@ mod tests {
     fn sign_manifest_with_key_path_produces_verifiable_signature() {
         use crate::direct_install_manifest::verify_manifest_body;
 
-        let tmp = std::env::temp_dir().join(format!(
+        // Test-only tmpfile path; same reasoning as the sibling test.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let tmp_root = std::env::temp_dir();
+        let tmp = tmp_root.join(format!(
             "aegis-sign-ok-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
