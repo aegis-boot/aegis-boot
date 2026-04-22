@@ -1,16 +1,17 @@
 # ADR 0002: Key Management for Signed Attestation + Bundle Trust Anchor
 
-**Status:** PROPOSED (revision 3)
+**Status:** ACCEPTED (revision 3)
 **Date:** 2026-04-21
 **Tracking issue:** [#366](https://github.com/williamzujkowski/aegis-boot/issues/366)
 **Revision history:**
 - 2026-04-20 — initial proposal (rev 1)
 - 2026-04-21 — rev 2 adds Decision 7 (Key Epoch), §3.6 (historical anchors), and §5.1 (rotation rehearsal) after consensus vote surfaced revocation-circularity, temporal-deadlock, and rotation-atrophy objections (vote result: 60% approve, below supermajority threshold)
 - 2026-04-21 — rev 3 closes rev-2's residual TOFU window on fresh installs by adding `MIN_REQUIRED_EPOCH` binary-embedded floor to Decision 7; extends §5.1 rehearsal with a signing-handoff audit step to waive the signing-oracle split trigger (§6.2)
+- 2026-04-21 — **ACCEPTED** on rev 3 via higher-order consensus vote (architect ✓88%, security ✓90%, devex ✓87%, ai_ml ✓90%, pm ✓88%, contrarian ✗95% → 83.3% approve, supermajority cleared). Unblocks #349 (Phase 3b attestation signing) and #367 (Phase D bundle trust anchor). Vote verification hashes preserved in PR #385.
 **Consumers:** [#349](https://github.com/williamzujkowski/aegis-boot/issues/349) (signed attestation manifest), [#367](https://github.com/williamzujkowski/aegis-boot/issues/367) (cross-platform `--direct-install` trust anchor, Phase D of [#365](https://github.com/williamzujkowski/aegis-boot/issues/365))
 **Supersedes:** portion of `crates/aegis-cli/src/attest.rs` header comment (lines 22–28) that defers signing to "epic #139"; this ADR claims the design.
 
-> **Reviewer note.** This ADR is PROPOSED pending consensus. Objections and alternative votes belong on #366, not scattered in PR review comments — consolidate discussion there so the decision log stays single-threaded. The `Alternatives considered` section below names the three strongest contrarian paths explicitly; please answer them before proposing a fourth.
+> **Status note.** This ADR is ACCEPTED as of rev 3 (2026-04-21, higher-order supermajority vote on #366). Future substantive changes should be tracked as a follow-up ADR that supersedes this one rather than in-place revision — the decision log stays linear. The `Alternatives considered` section names the three strongest contrarian paths; revisit triggers in §7 name the conditions under which each becomes worth re-opening.
 
 ---
 
