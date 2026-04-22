@@ -2,7 +2,10 @@
   description = "aegis-boot — signed UEFI Secure Boot rescue environment";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Pinned to a stable channel to avoid unstable-channel churn (saw a
+    # python311/sphinx-9.1.0 breakage on unstable mid-PR #406 development).
+    # Bump forward when the next LTS channel opens and this one goes EOL.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
