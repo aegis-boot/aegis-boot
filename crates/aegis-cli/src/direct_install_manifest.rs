@@ -28,9 +28,21 @@
 //! * Manifest body is hard-capped at [`MAX_MANIFEST_BYTES`] to bound
 //!   early-boot JSON parser exposure.
 //!
-//! PR3 ships **writer + signer + drift tests + a verify helper used
-//! by tests**. No caller is wired; `#[allow(dead_code)]` at module
-//! scope rides until a Phase 3 PR adds the `--direct-install` flag.
+//! Phase 3b of #349 (ADR 0002) wires the writer helpers
+//! (`build_manifest`, `compute_esp_file_hashes`, `read_device_identity`,
+//! `serialize_manifest`, `sign_manifest_body`) into
+//! `flash_direct_install()`. Signing is conditional on the
+//! `AEGIS_BOOT_SIGNING_KEY` env var per ADR 0002 §6.3: set for the
+//! maintainer's release-signed stick; unset for operator-written
+//! manifests which stay unsigned by default.
+//!
+//! The **verifier** helpers (`parse_and_validate_manifest`,
+//! `verify_manifest_body`, `esp_files_cover_canonical_set`,
+//! `canonical_esp_paths`) remain gated behind `#[allow(dead_code)]`
+//! pending Phase 4 (doctor --stick + rescue-tui stick check). They're
+//! already unit-tested against the writer output so the pair stays
+//! in-sync; the test coverage is why they're kept here rather than
+//! deleted and re-added later.
 //!
 //! [#277]: https://github.com/williamzujkowski/aegis-boot/issues/277
 

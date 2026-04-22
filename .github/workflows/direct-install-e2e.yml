@@ -100,14 +100,27 @@ jobs:
           LOOP=$(cat /tmp/direct-install.loop)
           mkdir -p /tmp/esp-direct
           sudo mount -o ro "${LOOP}p1" /tmp/esp-direct
-          # Record the canonical 6-file set + per-file sha256.
-          (cd /tmp/esp-direct && find . -type f | sort) > /tmp/direct-install.files
-          (cd /tmp/esp-direct && find . -type f | sort \
+          # Record the canonical 6-file set + per-file sha256. Exclude
+          # the attestation manifest + sidecar sig (#349 Phase 3b
+          # Stage 7) — mkusb.sh does not emit them and their per-flash
+          # sequence + device identity fields are expected to differ.
+          # The byte-parity test's purpose is to prove the SIGNED-CHAIN
+          # layer is identical between mkusb.sh and direct-install;
+          # the manifest is additive metadata, not part of the chain.
+          (cd /tmp/esp-direct && find . -type f \
+            ! -name 'aegis-boot-manifest.json' \
+            ! -name 'aegis-boot-manifest.json.minisig' | sort) \
+            > /tmp/direct-install.files
+          (cd /tmp/esp-direct && find . -type f \
+            ! -name 'aegis-boot-manifest.json' \
+            ! -name 'aegis-boot-manifest.json.minisig' | sort \
             | xargs sha256sum 2>/dev/null) > /tmp/direct-install.sha256
+          echo "--- direct-install FULL ESP file set (including manifest) ---"
+          (cd /tmp/esp-direct && find . -type f | sort)
           sudo umount /tmp/esp-direct
-          echo "--- direct-install ESP file set ---"
+          echo "--- direct-install ESP file set (excluding manifest, for parity diff) ---"
           cat /tmp/direct-install.files
-          echo "--- direct-install ESP sha256s ---"
+          echo "--- direct-install ESP sha256s (excluding manifest) ---"
           cat /tmp/direct-install.sha256
 
       # ---- Path B: build via mkusb.sh for byte-parity comparison ------------
@@ -135,7 +148,9 @@ jobs:
 
       - name: ESP byte-parity diff (the contrarian's correctness oracle)
         run: |
-          # File-set parity: same 6 canonical files in both ESPs.
+          # File-set parity: same 6 canonical signed-chain files in
+          # both ESPs (the attestation manifest is excluded upstream —
+          # see #349 Phase 3b note on the capture step).
           if ! diff -u /tmp/mkusb.files /tmp/direct-install.files; then
             echo "ESP file SET differs between mkusb.sh and direct-install"
             exit 1
@@ -149,6 +164,36 @@ jobs:
             exit 1
           fi
           echo "ESP byte-parity: PASS — direct-install produces identical ESP to mkusb.sh"
+
+      - name: Verify #349 Phase 3b manifest was written
+        run: |
+          # Stage 7 of flash_direct_install writes the attestation
+          # manifest (#349 Phase 3b). The byte-parity diff above
+          # deliberately excludes it. Assert it exists here so a
+          # regression that loses Stage 7 doesn't pass silently.
+          LOOP=$(cat /tmp/direct-install.loop)
+          mkdir -p /tmp/esp-direct-verify
+          sudo mount -o ro "${LOOP}p1" /tmp/esp-direct-verify
+          if [ ! -f /tmp/esp-direct-verify/aegis-boot-manifest.json ]; then
+            echo "MISSING: /EFI/aegis-boot-manifest.json — Stage 7 did not write the manifest"
+            sudo umount /tmp/esp-direct-verify
+            exit 1
+          fi
+          echo "--- aegis-boot-manifest.json (first 400 bytes) ---"
+          sudo head -c 400 /tmp/esp-direct-verify/aegis-boot-manifest.json
+          echo
+          # Manifest body must parse as JSON, carry schema_version=1,
+          # and list exactly 6 esp_files (the canonical signed-chain
+          # closed set per aegis-wire-formats::Manifest).
+          sudo cp /tmp/esp-direct-verify/aegis-boot-manifest.json /tmp/manifest.json
+          python3 <<'PY'
+          import json
+          m = json.load(open('/tmp/manifest.json'))
+          assert m['schema_version'] == 1, m
+          assert len(m['esp_files']) == 6, m['esp_files']
+          print(f"manifest OK: schema_version={m['schema_version']}, esp_files={len(m['esp_files'])}, sequence={m['sequence']}")
+          PY
+          sudo umount /tmp/esp-direct-verify
 
       # ---- Path A boot smoke: prove direct-install boots ---------------------
 
