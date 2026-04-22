@@ -24,11 +24,33 @@
 //! rendered man page embedded.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn main() {
-    let template_path = Path::new("../../man/aegis-boot.1.in");
-    let changelog_path = Path::new("../../CHANGELOG.md");
+    // Locate the man template + CHANGELOG. In a workspace build,
+    // they live two levels up at `../../man/aegis-boot.1.in` and
+    // `../../CHANGELOG.md`. In a `cargo publish`-packaged tarball,
+    // those parent dirs DON'T exist (the package only contains
+    // this crate's tree), so we fall back to package-local copies
+    // populated via `package.include` in Cargo.toml. See the
+    // include_workspace_inputs.sh helper for the publish-time
+    // staging step.
+    let template_path = first_existing(&[
+        Path::new("../../man/aegis-boot.1.in"),
+        Path::new("man/aegis-boot.1.in"),
+    ])
+    .unwrap_or_else(|| {
+        panic!(
+            "could not locate aegis-boot.1.in template (tried ../../man/ + man/). \
+             For `cargo publish`, ensure the man template + CHANGELOG were staged \
+             into the crate dir before packaging — see scripts/publish-if-new.sh."
+        )
+    });
+    let changelog_path = first_existing(&[
+        Path::new("../../CHANGELOG.md"),
+        Path::new("CHANGELOG.md"),
+    ])
+    .unwrap_or_else(|| PathBuf::from("../../CHANGELOG.md"));
     let out_dir = std::env::var_os("OUT_DIR").expect("OUT_DIR must be set by cargo");
     let out_path = Path::new(&out_dir).join("aegis-boot.1");
 
@@ -38,17 +60,27 @@ fn main() {
     println!("cargo:rerun-if-changed={}", template_path.display());
     println!("cargo:rerun-if-changed={}", changelog_path.display());
 
-    let template = fs::read_to_string(template_path)
+    let template = fs::read_to_string(&template_path)
         .unwrap_or_else(|e| panic!("read man template {}: {e}", template_path.display()));
 
     let version = std::env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION must be set");
-    let date = latest_release_date(changelog_path);
+    let date = latest_release_date(&changelog_path);
 
     let rendered = template
         .replace("@VERSION@", &version)
         .replace("@DATE@", &date);
 
     fs::write(&out_path, rendered).unwrap_or_else(|e| panic!("write {}: {e}", out_path.display()));
+}
+
+/// Return the first path from `candidates` that exists, or `None` if
+/// none do. Used by `main` to locate the man template + CHANGELOG
+/// across both the workspace-relative and package-local layouts.
+fn first_existing(candidates: &[&Path]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .find(|p| p.exists())
+        .map(|p| p.to_path_buf())
 }
 
 /// Parse the top-most released-version date from `CHANGELOG.md`.

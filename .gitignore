@@ -33,3 +33,11 @@ crates/*/fuzz/artifacts/
 *.cdx.json
 .security-discoveries.jsonl
 test-isos/
+
+# Per-crate staging files copied from workspace root by
+# scripts/publish-if-new.sh ahead of `cargo publish` (and trap-
+# cleaned on script exit). Listed here as belt-and-braces so a
+# trap-skipped local test run can't accidentally land them in a
+# commit.
+crates/aegis-cli/CHANGELOG.md
+crates/aegis-cli/man/

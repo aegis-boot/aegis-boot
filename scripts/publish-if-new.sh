@@ -83,5 +83,27 @@ if [[ -n "$LIVE_VERSION" && "$LIVE_VERSION" == "$WORKSPACE_VERSION" ]]; then
     exit 0
 fi
 
+# Stage workspace-rooted artifacts into per-crate subdirs that need
+# them at package time. `cargo publish` packages ONLY the crate dir,
+# so anything build.rs reads from `../../` must be copied in first.
+# Each crate's build.rs is responsible for falling back to the
+# package-local copy (see crates/aegis-cli/build.rs::first_existing).
+case "$CRATE" in
+    aegis-bootctl)
+        SCRIPT_DIR="${SCRIPT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)}"
+        REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+        crate_dir="$REPO_ROOT/crates/aegis-cli"
+        # Man-template + CHANGELOG: build.rs reads these to render
+        # the embedded man page. Stage into crate-local paths the
+        # build.rs `first_existing` fallback knows about.
+        mkdir -p "$crate_dir/man"
+        cp "$REPO_ROOT/man/aegis-boot.1.in" "$crate_dir/man/aegis-boot.1.in"
+        cp "$REPO_ROOT/CHANGELOG.md"        "$crate_dir/CHANGELOG.md"
+        # Cleanup on script exit so a workspace re-build after the
+        # publish doesn't see stale staged copies.
+        trap 'rm -rf "$crate_dir/man" "$crate_dir/CHANGELOG.md"' EXIT
+        ;;
+esac
+
 echo "publish-if-new: publishing ${CRATE} v${WORKSPACE_VERSION}..."
-exec cargo publish -p "$CRATE" --locked
+exec cargo publish -p "$CRATE" --locked --allow-dirty
