@@ -451,25 +451,48 @@ fn tempdir() -> Option<PathBuf> {
     None
 }
 
-struct IsoEntry {
+pub(crate) struct IsoEntry {
     /// ISO basename only — never includes a directory component.
     /// Kept as a basename so shell scripts that treat the old flat
     /// layout's `name` field as `basename(1)` output keep working;
     /// the subfolder path lives in [`IsoEntry::folder`] alongside.
-    name: String,
+    pub(crate) name: String,
     /// Relative path from the mount root to the folder containing
     /// this ISO, or `None` when the ISO sits at the root (flat
     /// layout — the pre-#274-Phase-6a behavior). Always
     /// forward-slash separated regardless of host OS, matching the
     /// exFAT stick filesystem's canonical form.
-    folder: Option<String>,
-    size: u64,
-    has_sha256: bool,
-    has_minisig: bool,
+    pub(crate) folder: Option<String>,
+    pub(crate) size: u64,
+    pub(crate) has_sha256: bool,
+    pub(crate) has_minisig: bool,
     /// Operator-curated display name from `<iso>.aegis.toml`, when present. (#246)
     display_name: Option<String>,
     /// Operator-curated description from `<iso>.aegis.toml`, when present. (#246)
     description: Option<String>,
+}
+
+#[cfg(test)]
+impl IsoEntry {
+    /// Test constructor for call sites that only care about
+    /// trust-state fields (doctor's trust-coverage rendering in
+    /// particular). Defaults `display_name` + `description` to None.
+    pub(crate) fn new_for_test(
+        name: impl Into<String>,
+        folder: Option<String>,
+        has_sha256: bool,
+        has_minisig: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            folder,
+            size: 0,
+            has_sha256,
+            has_minisig,
+            display_name: None,
+            description: None,
+        }
+    }
 }
 
 /// Parsed flags for `aegis-boot add`.
@@ -816,7 +839,7 @@ const ISO_SCAN_MAX_DEPTH: usize = 3;
 ///   (matches `iso-parser::find_iso_files` at crates/iso-parser/src/lib.rs:688).
 /// - **Sidecar locality**: `<iso>.sha256` / `<iso>.minisig` lookup is
 ///   per-folder — a sidecar in a different directory does NOT count.
-fn scan_isos(root: &Path) -> Vec<IsoEntry> {
+pub(crate) fn scan_isos(root: &Path) -> Vec<IsoEntry> {
     let mut out = Vec::new();
     scan_isos_recursive(root, root, 0, &mut out);
     out.sort_by(|a, b| {
