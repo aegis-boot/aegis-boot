@@ -158,6 +158,12 @@ jobs:
             experimental-features = nix-command flakes
       - run: nix flake check --no-build
       - run: nix develop --command cargo --version
+      # Build the operator CLI derivation so the `packages` output
+      # stays buildable on every PR. NixOS users install via:
+      #   nix run github:aegis-boot/aegis-boot -- flash /dev/sdX
+      # Drift in cargoLock or runtime-dep list surfaces here.
+      - run: nix build .#aegis-bootctl --print-build-logs
+      - run: nix run .# -- --version
 
   # Doc version drift-check (Phase 1c of #287 / #286).
   # Reads [workspace.package].version from Cargo.toml and verifies
