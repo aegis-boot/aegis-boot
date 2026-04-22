@@ -267,7 +267,8 @@ fn try_download_signature(url: &str, out: &Path, suffix_label: &str) -> bool {
 /// a FAILED verification on otherwise-correct artifacts — operators
 /// see the failure, can manually re-verify with an adjusted regex,
 /// and we fix the regex in a point release.
-const COSIGN_IDENTITY_REGEX: &str = r"^https://github\.com/aegis-boot/aegis-boot/\.github/workflows/release\.yml@refs/tags/.+$";
+const COSIGN_IDENTITY_REGEX: &str =
+    r"^https://github\.com/aegis-boot/aegis-boot/\.github/workflows/release\.yml@refs/tags/.+$";
 
 /// The Sigstore OIDC issuer for GitHub Actions' ambient OIDC tokens.
 /// This is a stable public endpoint; hardcoding is intentional.
@@ -783,9 +784,7 @@ mod tests {
         // constant. A drift that widens it (e.g. drops the workflow
         // anchor) would let a non-release workflow sign artifacts that
         // this CLI would accept. Spot-check the anchor + path shape.
-        assert!(
-            COSIGN_IDENTITY_REGEX.starts_with("^https://github\\.com/aegis-boot/aegis-boot/")
-        );
+        assert!(COSIGN_IDENTITY_REGEX.starts_with("^https://github\\.com/aegis-boot/aegis-boot/"));
         assert!(COSIGN_IDENTITY_REGEX.contains(".github/workflows/release\\.yml"));
         assert!(COSIGN_IDENTITY_REGEX.contains("refs/tags/"));
         assert!(COSIGN_IDENTITY_REGEX.ends_with(".+$"));

@@ -15,7 +15,7 @@ The exact test count drifts every release — `cargo test --workspace 2>&1 | gre
 
 Prereqs are listed at the top of [`scripts/dev-test.sh`](./scripts/dev-test.sh) and in [`docs/LOCAL_TESTING.md`](./docs/LOCAL_TESTING.md).
 
-The operator-facing CLI lives in [`crates/aegis-cli`](./crates/aegis-cli) (binary `aegis-boot`). When working on the operator surface, exercise it directly: `cargo run -p aegis-cli -- flash --help`. Don't add operator-facing flags without updating [`docs/CLI.md`](./docs/CLI.md).
+The operator-facing CLI lives in [`crates/aegis-cli`](./crates/aegis-cli) (binary `aegis-boot`). When working on the operator surface, exercise it directly: `cargo run -p aegis-bootctl -- flash --help`. Don't add operator-facing flags without updating [`docs/CLI.md`](./docs/CLI.md).
 
 ## Workflow
 
@@ -76,11 +76,11 @@ Every PR runs the following — each is also runnable locally. Running them befo
 | Workspace tests (stable + pinned MSRV) | `cargo test --workspace --locked` | `.github/workflows/ci.yml` |
 | Clippy `-D warnings` | `cargo clippy --workspace --all-targets -- -D warnings` | same |
 | `cargo fmt --check` | `cargo fmt --check` | same |
-| macOS + Windows cross-compile check | `cargo check -p aegis-cli --target x86_64-apple-darwin --all-targets` | same |
+| macOS + Windows cross-compile check | `cargo check -p aegis-bootctl --target x86_64-apple-darwin --all-targets` | same |
 | cargo-deny: advisories + licenses + bans + sources | `cargo deny check` | [`deny.toml`](./deny.toml) |
 | `cargo publish --dry-run` on publishable crates | `cargo publish --dry-run -p iso-parser -p kexec-loader --locked` | `.github/workflows/crates-publish-dryrun.yml` |
-| Constants drift | `cargo run -p aegis-cli --bin constants-docgen --features docgen -- --check` | [`crates/aegis-cli/src/constants.rs`](./crates/aegis-cli/src/constants.rs) |
-| CLI drift (subcommand + synopsis) | `cargo run -p aegis-cli --bin cli-docgen --features docgen -- --check` | `crates/aegis-cli/src/bin/cli_docgen.rs` |
+| Constants drift | `cargo run -p aegis-bootctl --bin constants-docgen --features docgen -- --check` | [`crates/aegis-cli/src/constants.rs`](./crates/aegis-cli/src/constants.rs) |
+| CLI drift (subcommand + synopsis) | `cargo run -p aegis-bootctl --bin cli-docgen --features docgen -- --check` | `crates/aegis-cli/src/bin/cli_docgen.rs` |
 | JSON schema drift | `cargo run -p aegis-wire-formats --bin aegis-wire-formats-schema-docgen --features schema -- --check` | `docs/reference/schemas/*.schema.json` |
 | Workspace version drift | CI job, no local gate | `.github/workflows/ci.yml` |
 | Semgrep Rust SAST | GitHub-only | `.github/workflows/ci.yml` (job `sast`) |
@@ -104,8 +104,8 @@ Adding a new subcommand touches **four** places; the CI `cli-drift` gate will re
 After editing, regenerate the synopsis (picked up by the CI drift-check):
 
 ```bash
-cargo build --release -p aegis-cli --bin aegis-boot
-cargo run -q -p aegis-cli --bin cli-docgen --features docgen -- --write
+cargo build --release -p aegis-bootctl --bin aegis-boot
+cargo run -q -p aegis-bootctl --bin cli-docgen --features docgen -- --write
 ```
 
 ## Security issues

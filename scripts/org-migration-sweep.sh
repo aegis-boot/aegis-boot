@@ -74,8 +74,19 @@ FIND_ARGS=(
     \)
     ! -path './target/*'
     ! -path './.git/*'
-    ! -name 'CHANGELOG.md'
 )
+
+# NOTE on CHANGELOG.md (2026-04-22 post-transfer learning): initial
+# version of this sweep excluded CHANGELOG.md under the assumption
+# that historical entries should preserve their original-identity
+# URLs. That assumption was wrong: GitHub's repo transfer redirects
+# the repo landing page but NOT individual /issues/NUM URLs — old
+# issue links 404 cleanly rather than 301-redirecting. Since the
+# issue numbers are stable across the org move (issues transferred
+# WITH the repo), rewriting CHANGELOG's issue URLs is safe and
+# necessary for lychee + reader link integrity. Original cosign-
+# identity rationale for release artifacts still holds — those are
+# referenced by release-notes body/URL, not CHANGELOG entries.
 
 # Collect files with any match in a single pass so we can report
 # counts + iterate cleanly.

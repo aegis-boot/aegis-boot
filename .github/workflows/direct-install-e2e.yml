@@ -56,7 +56,7 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: "1700000000"
         run: |
-          cargo build --release -p aegis-cli -p rescue-tui
+          cargo build --release -p aegis-bootctl -p rescue-tui
 
       - name: Build initramfs (out/initramfs.cpio.gz)
         env:

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Attestation",
-  "description": "One flash + zero-or-more ISO additions, captured as a single JSON document on the host. Stored under `$XDG_DATA_HOME/aegis-boot/attestations/` (or `~/.local/share/aegis-boot/attestations/` if `XDG_DATA_HOME` is unset). The `aegis-boot attest list` / `attest show` commands read these back for chain-of-custody queries.\n\nv0 ships unsigned — the trust anchor is \"the operator ran this command on this host, the timestamps + hashes are the evidence.\" TPM PCR attestation + signing lands under epic [#139](https://github.com/williamzujkowski/aegis-boot/issues/139) as additive fields; the current schema is forward-compatible (consumers ignore unknown fields).",
+  "description": "One flash + zero-or-more ISO additions, captured as a single JSON document on the host. Stored under `$XDG_DATA_HOME/aegis-boot/attestations/` (or `~/.local/share/aegis-boot/attestations/` if `XDG_DATA_HOME` is unset). The `aegis-boot attest list` / `attest show` commands read these back for chain-of-custody queries.\n\nv0 ships unsigned — the trust anchor is \"the operator ran this command on this host, the timestamps + hashes are the evidence.\" TPM PCR attestation + signing lands under epic [#139](https://github.com/aegis-boot/aegis-boot/issues/139) as additive fields; the current schema is forward-compatible (consumers ignore unknown fields).",
   "type": "object",
   "required": [
     "flashed_at",

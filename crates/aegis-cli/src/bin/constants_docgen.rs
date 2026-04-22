@@ -300,7 +300,7 @@ fn main() -> ExitCode {
                     drift_files.len()
                 );
                 eprintln!(
-                    "Fix: run `cargo run -p aegis-cli --bin constants-docgen --features docgen` locally and commit the result."
+                    "Fix: run `cargo run -p aegis-bootctl --bin constants-docgen --features docgen` locally and commit the result."
                 );
                 ExitCode::from(1)
             }

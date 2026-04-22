@@ -1,5 +1,10 @@
 [package]
-name = "aegis-cli"
+# Package name: `aegis-bootctl` (crates.io). The name `aegis-cli` on
+# crates.io is owned by an unrelated Aegis Authenticator project
+# (v1.3.95 as of 2026-04-22). Directory stays `crates/aegis-cli/` to
+# avoid rewriting git history; binary stays `aegis-boot` via the
+# `[[bin]]` entry below (operator-facing name is unchanged).
+name = "aegis-bootctl"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

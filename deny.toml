@@ -82,7 +82,7 @@ exceptions = []
 multiple-versions = "warn"
 # Wildcards are warned (not denied) because workspace-internal
 # `{ path = "../foo" }` deps show as wildcard "*" versions. Several
-# workspace crates (aegis-cli, rescue-tui) consume other workspace
+# workspace crates (aegis-bootctl, rescue-tui) consume other workspace
 # crates via path-only. `allow-wildcard-paths = true` only exempts
 # private crates, and these are publishable. Tightening to "deny"
 # requires adding explicit `version = "..."` to every internal
