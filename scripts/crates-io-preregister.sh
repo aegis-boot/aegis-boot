@@ -10,7 +10,13 @@
 # post-transfer `cargo owner --add aegis-boot` step.
 #
 # Usage:
-#   cargo login <your-crates.io-token>   # one-time, if not already logged in
+#   # Option A — token in `pass` (recommended — stays out of shell history):
+#   pass show aegis-boot/crates-io-token | cargo login
+#
+#   # Option B — interactive:
+#   cargo login   # prompts for the token
+#
+#   # Then run the script:
 #   ./scripts/crates-io-preregister.sh
 #
 # Runs from YOUR (personal) cargo account. All 8 placeholders get
