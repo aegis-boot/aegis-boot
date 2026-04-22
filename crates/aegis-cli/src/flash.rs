@@ -679,18 +679,21 @@ fn flash_direct_install(drive: &Drive, out_dir: &Path) -> Result<(), FlashError>
     // signed-chain inputs) and both fast, so one progress line is less
     // noise than two.
     let sources = resolve_signed_chain_sources_timed(5, out_dir, &combined_initrd)?;
+    let staging = EspStagingSources {
+        shim: &sources.shim,
+        grub: &sources.grub,
+        kernel: &sources.kernel,
+        combined_initrd: &combined_initrd,
+        grub_cfg: &grub_cfg,
+    };
     run_timed_stage(6, "Stage ESP (mmd + 6 mcopy writes)", || {
-        let staging = EspStagingSources {
-            shim: &sources.shim,
-            grub: &sources.grub,
-            kernel: &sources.kernel,
-            combined_initrd: &combined_initrd,
-            grub_cfg: &grub_cfg,
-        };
         stage_esp(&part1, &staging).map_err(|e| FlashError::DirectInstall {
             stage: DirectInstallStage::StageEsp,
             detail: e,
         })
+    })?;
+    run_timed_stage(7, "Write attestation manifest", || {
+        write_manifest_stage(dev, &part1, &part2, &staging, &work_dir)
     })?;
 
     println!();
@@ -702,8 +705,184 @@ fn flash_direct_install(drive: &Drive, out_dir: &Path) -> Result<(), FlashError>
     Ok(())
 }
 
+/// Stage 7: build + (optionally sign) + write the attestation manifest
+/// onto the ESP. Runs after `stage_esp` has laid the signed chain down,
+/// so `compute_esp_file_hashes` sees the same bytes the firmware will
+/// load. Phase 3b of #349 / ADR 0002.
+///
+/// Signing is gated on the `AEGIS_BOOT_SIGNING_KEY` env var:
+/// - Set: load the minisign secret key from the named path, sign the
+///   manifest body, and write `::/aegis-boot-manifest.json.minisig`
+///   alongside the JSON.
+/// - Unset: write the manifest body unsigned with a warn log. This is
+///   the default for operator-written manifests per ADR 0002 §6.3
+///   (maintainer signs release manifests; operator-produced ones are
+///   unsigned by default).
+///
+/// Both paths are idempotent: mcopy writes with `-D o` (overwrite), so
+/// a re-run of `flash --direct-install` on the same stick updates the
+/// manifest in place.
+#[cfg(target_os = "linux")]
+fn write_manifest_stage(
+    disk_dev: &Path,
+    part1_dev: &Path,
+    part2_dev: &Path,
+    staging: &crate::direct_install::EspStagingSources<'_>,
+    work_dir: &Path,
+) -> Result<(), FlashError> {
+    use crate::direct_install_manifest::{
+        build_manifest, compute_esp_file_hashes, read_device_identity, serialize_manifest,
+        MANIFEST_ESP_PATH, MANIFEST_SIG_ESP_PATH,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let stage_err = |detail: String| FlashError::DirectInstall {
+        stage: DirectInstallStage::WriteManifest,
+        detail,
+    };
+
+    let device = read_device_identity(disk_dev, part1_dev, part2_dev)
+        .map_err(|e| stage_err(format!("read device identity: {e}")))?;
+    let esp_files = compute_esp_file_hashes(staging)
+        .map_err(|e| stage_err(format!("compute ESP file hashes: {e}")))?;
+    let sequence = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(1);
+    let tool_version = env!("CARGO_PKG_VERSION");
+    let manifest = build_manifest(tool_version, sequence, device, esp_files);
+    let body =
+        serialize_manifest(&manifest).map_err(|e| stage_err(format!("serialize manifest: {e}")))?;
+
+    let body_path = work_dir.join("aegis-boot-manifest.json");
+    std::fs::write(&body_path, &body)
+        .map_err(|e| stage_err(format!("stage manifest body: {e}")))?;
+    mcopy_to_esp(part1_dev, &body_path, MANIFEST_ESP_PATH)?;
+
+    if let Some(sig_path) = sign_manifest_if_configured(&body, work_dir, stage_err)? {
+        mcopy_to_esp(part1_dev, &sig_path, MANIFEST_SIG_ESP_PATH)?;
+    }
+    Ok(())
+}
+
+/// Load the signing key from `AEGIS_BOOT_SIGNING_KEY` (if set), sign
+/// the manifest body, write the `.minisig` to `work_dir`, and return
+/// its path. Returns `Ok(None)` with a warn log when the env var is
+/// unset — the unsigned-default path documented in ADR 0002 §6.3.
+#[cfg(target_os = "linux")]
+fn sign_manifest_if_configured<F>(
+    body: &[u8],
+    work_dir: &Path,
+    mk_err: F,
+) -> Result<Option<PathBuf>, FlashError>
+where
+    F: Fn(String) -> FlashError,
+{
+    sign_manifest_with_key_path(
+        std::env::var("AEGIS_BOOT_SIGNING_KEY").ok(),
+        body,
+        work_dir,
+        mk_err,
+    )
+}
+
+/// Signing implementation that takes the key-path as an explicit arg
+/// instead of reading `AEGIS_BOOT_SIGNING_KEY`. Separated so tests can
+/// exercise both the `None` branch (unsigned default) and the `Some`
+/// branch without touching process env (crate has `forbid(unsafe_code)`
+/// which blocks Rust-2024's unsafe `std::env::set_var`).
+#[cfg(target_os = "linux")]
+fn sign_manifest_with_key_path<F>(
+    key_path: Option<String>,
+    body: &[u8],
+    work_dir: &Path,
+    mk_err: F,
+) -> Result<Option<PathBuf>, FlashError>
+where
+    F: Fn(String) -> FlashError,
+{
+    use crate::direct_install_manifest::sign_manifest_body;
+
+    let Some(key_path) = key_path else {
+        eprintln!(
+            "aegis-boot flash: AEGIS_BOOT_SIGNING_KEY unset — \
+             writing manifest unsigned (operator default per ADR 0002 §6.3)"
+        );
+        return Ok(None);
+    };
+    let sk = load_secret_key(&key_path).map_err(&mk_err)?;
+    let sig = sign_manifest_body(body, &sk).map_err(|e| mk_err(format!("sign manifest: {e}")))?;
+    let sig_path = work_dir.join("aegis-boot-manifest.json.minisig");
+    std::fs::write(&sig_path, &sig)
+        .map_err(|e| mk_err(format!("stage manifest signature: {e}")))?;
+    Ok(Some(sig_path))
+}
+
+/// Load a minisign secret key from a file path. Handles both the
+/// encrypted and unencrypted formats:
+/// - If `AEGIS_BOOT_SIGNING_KEY_PASSWORD` is set, treat the key as
+///   encrypted and decrypt with that passphrase.
+/// - Otherwise, try the unencrypted-key path first; if that rejects
+///   the file as encrypted, fall back to prompting for a password.
+#[cfg(target_os = "linux")]
+fn load_secret_key(key_path: &str) -> Result<minisign::SecretKey, String> {
+    let raw = std::fs::read_to_string(key_path)
+        .map_err(|e| format!("read signing key file {key_path}: {e}"))?;
+    let sk_box: minisign::SecretKeyBox = raw.into();
+
+    if let Ok(password) = std::env::var("AEGIS_BOOT_SIGNING_KEY_PASSWORD") {
+        return minisign::SecretKey::from_box(sk_box, Some(password))
+            .map_err(|e| format!("decrypt signing key from {key_path}: {e}"));
+    }
+
+    // Unset password env → try unencrypted key first (aegis-boot's
+    // default maintainer-laptop config per ADR 0002 §3.3 uses a
+    // local-filesystem unencrypted key guarded by filesystem perms,
+    // not by passphrase). Fall back to interactive prompt only if
+    // the file is actually encrypted.
+    match minisign::SecretKey::from_unencrypted_box(sk_box.clone()) {
+        Ok(sk) => Ok(sk),
+        Err(_) => minisign::SecretKey::from_box(sk_box, None).map_err(|e| {
+            format!(
+                "load encrypted signing key from {key_path} (set AEGIS_BOOT_SIGNING_KEY_PASSWORD \
+                 to avoid the interactive prompt): {e}"
+            )
+        }),
+    }
+}
+
+/// Thin mcopy wrapper shared by the manifest-stage helpers. Reuses the
+/// same argv builder that `stage_esp` uses so layout constraints stay
+/// in one place.
+#[cfg(target_os = "linux")]
+fn mcopy_to_esp(part1_dev: &Path, src: &Path, dest: &str) -> Result<(), FlashError> {
+    use crate::direct_install::build_mcopy_argv;
+
+    let dev = part1_dev.display().to_string();
+    let argv = build_mcopy_argv(&dev, src, dest);
+    let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let out = Command::new("sudo")
+        .args(&argv_refs)
+        .output()
+        .map_err(|e| FlashError::DirectInstall {
+            stage: DirectInstallStage::WriteManifest,
+            detail: format!("mcopy exec: {e}"),
+        })?;
+    if !out.status.success() {
+        return Err(FlashError::DirectInstall {
+            stage: DirectInstallStage::WriteManifest,
+            detail: format!(
+                "mcopy {dest} exited {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Stage 5 wrapper that combines `ResolveSources` + `CombineInitrd`
-/// under a single `[5/6]` banner with one wall-clock timer. Split out
+/// under a single `[5/7]` banner with one wall-clock timer. Split out
 /// so [`flash_direct_install`] stays inside the 50-line budget enforced
 /// elsewhere in this crate.
 #[cfg(target_os = "linux")]
@@ -713,7 +892,7 @@ fn resolve_signed_chain_sources_timed(
     combined_initrd: &Path,
 ) -> Result<SignedChainSources, FlashError> {
     use std::io::Write as _;
-    print!("  [{index}/6] Resolve + combine initrd  …  ");
+    print!("  [{index}/7] Resolve + combine initrd  …  ");
     std::io::stdout().flush().ok();
     let start = std::time::Instant::now();
     let result: Result<SignedChainSources, FlashError> = (|| {
@@ -747,17 +926,17 @@ fn resolve_signed_chain_sources_timed(
 }
 
 /// Run a stage closure with wall-clock timing + an inline
-/// `[N/6] <label>  …  done (<elapsed>)` print. The stage index is
+/// `[N/7] <label>  …  done (<elapsed>)` print. The stage index is
 /// passed explicitly rather than auto-incremented because stage 5
 /// groups two logical steps under one operator-visible banner;
-/// auto-counting would over-report to 7.
+/// auto-counting would over-report past the canonical total.
 #[cfg(target_os = "linux")]
 fn run_timed_stage<F>(index: u32, label: &str, work: F) -> Result<(), FlashError>
 where
     F: FnOnce() -> Result<(), FlashError>,
 {
     use std::io::Write as _;
-    print!("  [{index}/6] {label}  …  ");
+    print!("  [{index}/7] {label}  …  ");
     std::io::stdout().flush().ok();
     let start = std::time::Instant::now();
     let result = work();
@@ -1668,6 +1847,10 @@ pub(crate) enum DirectInstallStage {
     CombineInitrd,
     /// `mmd` the EFI dir tree + 6 `mcopy` writes onto the ESP.
     StageEsp,
+    /// Build attestation manifest from ESP file hashes + GPT identity
+    /// and write `::/aegis-boot-manifest.json` (+ `.minisig` if
+    /// `AEGIS_BOOT_SIGNING_KEY` is set) onto the ESP. Phase 3b of #349.
+    WriteManifest,
 }
 
 impl FlashError {
@@ -1766,6 +1949,13 @@ impl crate::userfacing::UserFacing for FlashError {
                     "ESP staging failed mid-write. Re-run; mcopy uses -D o (overwrite) so \
                      re-runs are idempotent. If it persists, check that mtools is installed \
                      (apt-get install mtools)."
+                }
+                DirectInstallStage::WriteManifest => {
+                    "Signed chain is on the stick, but the attestation manifest write failed. \
+                     The stick boots. Re-run `aegis-boot flash --direct-install` to retry; \
+                     the manifest step is idempotent. If signing failed, check \
+                     AEGIS_BOOT_SIGNING_KEY points at a readable minisign secret key file \
+                     (or unset it to skip signing — manifest is still written, just unsigned)."
                 }
             },
             // NoImageSource is handled via suggestions() above.
@@ -2469,5 +2659,70 @@ mod tests {
             partition_path(Path::new("/dev/loop0"), 1),
             PathBuf::from("/dev/loop0p1")
         );
+    }
+
+    // ---- #349 Phase 3b: manifest signing env-var conditional ---------------
+
+    /// `sign_manifest_with_key_path` returns `Ok(None)` when the
+    /// key-path is `None` — the unsigned-default path per ADR 0002
+    /// §6.3. No signing key loaded, no `.minisig` written.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn sign_manifest_with_key_path_returns_none_when_unset() {
+        let tmp = std::env::temp_dir().join(format!("aegis-sign-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let body = b"{\"placeholder\": \"manifest body\"}";
+        let mk_err = |detail: String| FlashError::DirectInstall {
+            stage: DirectInstallStage::WriteManifest,
+            detail,
+        };
+        let got = sign_manifest_with_key_path(None, body, &tmp, mk_err).unwrap();
+        assert!(got.is_none(), "unsigned path should return None");
+        assert!(
+            !tmp.join("aegis-boot-manifest.json.minisig").exists(),
+            ".minisig should NOT have been written in unsigned path"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `sign_manifest_with_key_path` writes a valid minisign signature
+    /// when given a real secret-key path, and the signature verifies
+    /// against the matching public key. Exercises the full sign path
+    /// end-to-end through a generated keypair.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn sign_manifest_with_key_path_produces_verifiable_signature() {
+        use crate::direct_install_manifest::verify_manifest_body;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "aegis-sign-ok-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let kp = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let sk_path = tmp.join("test.key");
+        std::fs::write(&sk_path, kp.sk.to_box(None).unwrap().to_string()).unwrap();
+
+        let body = b"{\"schema_version\":1,\"tool_version\":\"test\"}";
+        let mk_err = |detail: String| FlashError::DirectInstall {
+            stage: DirectInstallStage::WriteManifest,
+            detail,
+        };
+        let sig_path =
+            sign_manifest_with_key_path(Some(sk_path.display().to_string()), body, &tmp, mk_err)
+                .unwrap()
+                .expect("signed path should return Some");
+        assert!(sig_path.exists(), ".minisig should have been written");
+
+        let sig_bytes = std::fs::read(&sig_path).unwrap();
+        verify_manifest_body(body, &sig_bytes, &kp.pk).expect("signature must verify");
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }
