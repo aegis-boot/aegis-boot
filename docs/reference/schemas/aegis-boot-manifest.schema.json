@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Manifest",
-  "description": "Top-level manifest body. Serialized field order matches the declaration order below — relied on for canonical JSON stability (the signature is computed over `serde_json::to_vec(&Manifest)`).\n\nThe Rust field is `sequence` (clippy prefers not to prefix the struct name); the JSON wire field stays `manifest_sequence` per the [#277] schema lock via `#[serde(rename)]`.\n\n[#277]: https://github.com/williamzujkowski/aegis-boot/issues/277",
+  "description": "Top-level manifest body. Serialized field order matches the declaration order below — relied on for canonical JSON stability (the signature is computed over `serde_json::to_vec(&Manifest)`).\n\nThe Rust field is `sequence` (clippy prefers not to prefix the struct name); the JSON wire field stays `manifest_sequence` per the [#277] schema lock via `#[serde(rename)]`.\n\n[#277]: https://github.com/aegis-boot/aegis-boot/issues/277",
   "type": "object",
   "required": [
     "allowed_files_closed_set",
@@ -26,7 +26,7 @@
       ]
     },
     "esp_files": {
-      "description": "Closed set of files on the ESP. Verifier rejects the stick if any ESP file is not listed here or is missing / has a different sha256 than recorded. Six entries today, one per line in the signed-chain layout established by Phase 2b of [#274](https://github.com/williamzujkowski/aegis-boot/issues/274).",
+      "description": "Closed set of files on the ESP. Verifier rejects the stick if any ESP file is not listed here or is missing / has a different sha256 than recorded. Six entries today, one per line in the signed-chain layout established by Phase 2b of [#274](https://github.com/aegis-boot/aegis-boot/issues/274).",
       "type": "array",
       "items": {
         "$ref": "#/definitions/EspFileEntry"
