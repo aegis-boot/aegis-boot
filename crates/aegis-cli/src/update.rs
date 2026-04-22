@@ -23,14 +23,28 @@
 //! message with the matched attestation path so the operator can
 //! verify ownership and time of flash.
 //!
+//! # ESP diff (acceptance criterion from #181 Phase 1)
+//!
+//! When the five eligibility gates pass, we additionally compute
+//! the per-file sha256 diff between the stick's current ESP (via
+//! `mtype` piped into `sha256sum`) and the host-side signed-chain
+//! sources that `mkusb.sh` / direct-install would write today.
+//!
+//! The diff is **informational** — it does not gate eligibility.
+//! A partial read (e.g. `mtype` not installed, one file missing,
+//! permission denied) surfaces as an error row in the diff so the
+//! operator sees exactly which comparisons were inconclusive.
+//!
 //! # What's deliberately NOT in this phase
 //!
-//! - Building a fresh ESP image to diff against (deferred to phase 1.5
-//!   — requires either calling mkusb.sh or a Rust equivalent, and the
-//!   diff is useful but not blocking for the safety story)
 //! - Any write to the device (phase 2 — atomic file replace with
 //!   backup)
 //! - CA signature verification on the new chain (phase 3)
+//! - A full pre-rendered grub.cfg to hash against (direct-install
+//!   builds grub.cfg in-process via `build_grub_cfg_body`; Phase 2
+//!   will wire that into the fresh-side so grub.cfg gets a real
+//!   diff row — today it surfaces as `UNKNOWN` with an explicit
+//!   Phase-2 pointer)
 //!
 //! Tracked under epic [#181](https://github.com/williamzujkowski/aegis-boot/issues/181).
 
@@ -96,8 +110,16 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
             disk_guid,
         } => {
             let chain = resolve_host_chain();
+            // Phase 1 of #181 acceptance criterion: per-file diff
+            // between the stick's current ESP and what a fresh
+            // flash would install. Read failures here do NOT
+            // downgrade eligibility — per-file errors surface in
+            // the diff rows so the operator sees exactly what was
+            // inconclusive.
+            let esp_part = partition_path(&dev, 1);
+            let diff = build_esp_diff(&esp_part, &chain);
             if json_mode {
-                print_update_json_eligible(&dev, &disk_guid, &attestation_path, &chain);
+                print_update_json_eligible(&dev, &disk_guid, &attestation_path, &chain, &diff);
             } else {
                 println!("Status: ELIGIBLE for in-place update.");
                 println!();
@@ -105,9 +127,9 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
                 println!("  attestation:      {}", attestation_path.display());
                 println!("  AEGIS_ISOS:       will be preserved byte-for-byte");
                 println!();
-                // Phase 1.5 of #181: show the operator the host-side signed
-                // chain that a future `aegis-boot update` would install.
                 print_host_chain(&chain);
+                println!();
+                print_esp_diff(&diff);
                 println!();
                 println!("NOTE: this is a read-only eligibility check (phase 1 of #181).");
                 println!("The actual in-place update lands in a follow-up PR. No writes");
@@ -131,8 +153,10 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
 }
 
 /// Emit the eligible-case JSON envelope via the typed
-/// [`aegis_wire_formats::UpdateReport`]. Phase 4b-5 of #286 migrated
-/// the hand-rolled `println!()` chain to the wire-format crate.
+/// [`aegis_wire_formats::UpdateReport`]. Phase 4b-5 of #286
+/// migrated the hand-rolled `println!()` chain to the wire-format
+/// crate. Phase 1 of #181 added the `esp_diff` payload.
+///
 /// Wire contract pinned via
 /// `docs/reference/schemas/aegis-boot-update.schema.json`.
 fn print_update_json_eligible(
@@ -140,6 +164,7 @@ fn print_update_json_eligible(
     disk_guid: &str,
     attestation_path: &Path,
     chain: &[HostChainEntry],
+    diff: &[EspFileDiff],
 ) {
     let host_chain = chain
         .iter()
@@ -156,6 +181,7 @@ fn print_update_json_eligible(
             },
         })
         .collect();
+    let esp_diff = diff.iter().map(to_wire_file_diff).collect();
     let report = aegis_wire_formats::UpdateReport {
         schema_version: aegis_wire_formats::UPDATE_SCHEMA_VERSION,
         tool_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -164,9 +190,34 @@ fn print_update_json_eligible(
             disk_guid: disk_guid.to_string(),
             attestation_path: attestation_path.display().to_string(),
             host_chain,
+            esp_diff,
         },
     };
     emit_update_report(&report);
+}
+
+/// Map an internal [`EspFileDiff`] row to the wire-format
+/// [`aegis_wire_formats::UpdateFileDiff`] shape. Splits each
+/// `Result<String, String>` pair into the mutually-exclusive
+/// `sha256` / `error` wire fields.
+fn to_wire_file_diff(d: &EspFileDiff) -> aegis_wire_formats::UpdateFileDiff {
+    let (current_sha256, current_error) = match &d.current {
+        Ok(h) => (Some(h.clone()), None),
+        Err(e) => (None, Some(e.clone())),
+    };
+    let (fresh_sha256, fresh_error) = match &d.fresh {
+        Ok(h) => (Some(h.clone()), None),
+        Err(e) => (None, Some(e.clone())),
+    };
+    aegis_wire_formats::UpdateFileDiff {
+        role: d.role.to_string(),
+        esp_path: d.esp_path.to_string(),
+        current_sha256,
+        current_error,
+        fresh_sha256,
+        fresh_error,
+        would_change: d.would_change(),
+    }
 }
 
 fn print_update_json_ineligible(dev: &Path, reason: &str) {
@@ -226,10 +277,10 @@ fn print_host_chain(chain: &[HostChainEntry]) {
 /// `KERNEL_SRC` / `INITRD_SRC` triple in `mkusb.sh`. `sha256` is the result
 /// of the hash attempt: `Err` carries a human-readable reason when the
 /// file couldn't be resolved or hashed.
-struct HostChainEntry {
-    role: &'static str,
-    path: PathBuf,
-    sha256: Result<String, String>,
+pub(crate) struct HostChainEntry {
+    pub(crate) role: &'static str,
+    pub(crate) path: PathBuf,
+    pub(crate) sha256: Result<String, String>,
 }
 
 /// Replicate `mkusb.sh`'s host-chain resolution in Rust. Looks at the
@@ -318,6 +369,259 @@ fn sha256_file(path: &Path) -> Result<String, String> {
         .filter(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
         .map(str::to_ascii_lowercase)
         .ok_or_else(|| format!("sha256sum output malformed: {stdout:?}"))
+}
+
+/// One row of the ESP diff — one canonical destination path,
+/// paired with the two hash attempts (current stick + fresh host
+/// source). Each side carries the sha256 on success or an
+/// operator-readable reason on failure.
+#[derive(Debug, Clone)]
+pub(crate) struct EspFileDiff {
+    /// Role label (`shim`, `grub`, `grub_cfg_boot`,
+    /// `grub_cfg_ubuntu`, `kernel`, `initrd`). Differs from the
+    /// host-side chain roles because the ESP has two grub.cfg
+    /// copies (boot + ubuntu).
+    pub role: &'static str,
+    /// Destination path on the ESP, with a leading `/` and no
+    /// mtools `::` prefix. Example: `/EFI/BOOT/BOOTX64.EFI`.
+    pub esp_path: &'static str,
+    /// sha256 of the file currently on the stick's ESP, or the
+    /// reason we couldn't read it.
+    pub current: Result<String, String>,
+    /// sha256 of the host-side source a fresh flash would install,
+    /// or the reason we couldn't hash it. Matches the
+    /// [`HostChainEntry`] we already computed for the preview.
+    pub fresh: Result<String, String>,
+}
+
+impl EspFileDiff {
+    /// Phase-1 verdict: `true` only when both sides are present
+    /// AND differ. Missing-either-side is not a "would change" —
+    /// see [`aegis_wire_formats::UpdateFileDiff`] docs.
+    pub(crate) fn would_change(&self) -> bool {
+        match (&self.current, &self.fresh) {
+            (Ok(a), Ok(b)) => a != b,
+            _ => false,
+        }
+    }
+
+    /// Human-readable status label: `CHANGED`, `UNCHANGED`, or
+    /// `UNKNOWN` (when either side couldn't be hashed).
+    pub(crate) fn status_label(&self) -> &'static str {
+        match (&self.current, &self.fresh) {
+            (Ok(a), Ok(b)) if a == b => "UNCHANGED",
+            (Ok(_), Ok(_)) => "CHANGED",
+            _ => "UNKNOWN",
+        }
+    }
+}
+
+/// Canonical ESP layout that `mkusb.sh` / direct-install writes.
+/// Kept as a table of `(role, esp_path, source_role)` so the diff
+/// has a single source of truth for which files we compare.
+///
+/// Two rows (`grub_cfg_boot`, `grub_cfg_ubuntu`) both point to the
+/// same host-side source `grub_cfg` because `mkusb.sh` writes the
+/// same grub.cfg bytes to both destinations.
+///
+/// `source_role` matches the role strings in [`HostChainEntry`];
+/// when it's `grub_cfg` (no host-chain entry today) the fresh
+/// side surfaces as an UNKNOWN with a Phase-2 pointer.
+const ESP_DIFF_SLOTS: &[(&str, &str, &str)] = &[
+    // (role, esp_path_on_stick, host_source_role)
+    ("shim", "/EFI/BOOT/BOOTX64.EFI", "shim"),
+    ("grub", "/EFI/BOOT/grubx64.efi", "grub"),
+    ("grub_cfg_boot", "/EFI/BOOT/grub.cfg", "grub_cfg"),
+    ("grub_cfg_ubuntu", "/EFI/ubuntu/grub.cfg", "grub_cfg"),
+    ("kernel", "/vmlinuz", "kernel"),
+    ("initrd", "/initrd.img", "initrd"),
+];
+
+/// Build the per-file diff. Reads each canonical ESP slot via
+/// `mtype` on the stick's partition 1, hashes via `sha256sum`,
+/// and pairs each row with the matching host-side source's
+/// sha256 (already computed by [`resolve_host_chain`]).
+///
+/// The `grub.cfg` rows carry a Phase-1-specific error on the
+/// fresh side because direct-install renders grub.cfg
+/// in-process (see `direct_install::build_grub_cfg_body`) rather
+/// than reading it from a file — so we have no stable host-side
+/// hash for it today. Phase 2 will close that gap.
+pub(crate) fn build_esp_diff(esp_part: &Path, chain: &[HostChainEntry]) -> Vec<EspFileDiff> {
+    ESP_DIFF_SLOTS
+        .iter()
+        .map(|(role, esp_path, source_role)| {
+            let current = mtype_sha256(esp_part, esp_path);
+            let fresh = lookup_chain_sha(chain, source_role);
+            EspFileDiff {
+                role,
+                esp_path,
+                current,
+                fresh,
+            }
+        })
+        .collect()
+}
+
+/// Look up a host-chain entry by role and return its hash
+/// `Result`. Absent role → Phase-1-specific "not sampled on host
+/// side" message (grub.cfg today, flagged for Phase 2).
+fn lookup_chain_sha(chain: &[HostChainEntry], role: &str) -> Result<String, String> {
+    match chain.iter().find(|e| e.role == role) {
+        Some(entry) => entry.sha256.clone(),
+        None => Err(format!(
+            "host-side source for role '{role}' not sampled in Phase 1 \
+             (grub.cfg is rendered in-process; Phase 2 will wire this up)"
+        )),
+    }
+}
+
+/// Read a file from the FAT32 ESP at `esp_part` via `mtype`,
+/// pipe into `sha256sum`, and return the hex digest. On any
+/// failure return an operator-readable string.
+///
+/// We use `mtype -i <part>` rather than mounting because (a) it
+/// requires no root, (b) it's the inverse of the `mcopy` calls
+/// direct-install already uses to write the ESP, and (c) it
+/// doesn't risk leaving the stick mounted if we panic mid-hash.
+///
+/// `esp_path` must start with `/` — we prepend the mtools `::`
+/// convention internally to form the drive-relative path.
+pub(crate) fn mtype_sha256(esp_part: &Path, esp_path: &str) -> Result<String, String> {
+    if !esp_path.starts_with('/') {
+        return Err(format!(
+            "ESP path must be absolute (start with '/'), got {esp_path:?}"
+        ));
+    }
+    let dev = esp_part.display().to_string();
+    let mtools_target = format!("::{esp_path}");
+    // `mtype -i <dev> -- <::path>` — the `--` guards against the
+    // ::path being misread as a flag on some mtools versions.
+    let mtype_out = Command::new("mtype")
+        .arg("-i")
+        .arg(&dev)
+        .arg("--")
+        .arg(&mtools_target)
+        .output()
+        .map_err(|e| format!("mtype exec failed: {e} (is mtools installed?)"))?;
+    if !mtype_out.status.success() {
+        let stderr = String::from_utf8_lossy(&mtype_out.stderr);
+        return Err(format!(
+            "mtype {mtools_target} exited {}: {}",
+            mtype_out.status,
+            stderr.trim()
+        ));
+    }
+    sha256_stdin(&mtype_out.stdout)
+}
+
+/// Feed `bytes` into `sha256sum` on stdin and parse the 64-hex
+/// digest. Factored out of [`mtype_sha256`] so the test module
+/// can exercise it with known payloads.
+pub(crate) fn sha256_stdin(bytes: &[u8]) -> Result<String, String> {
+    use std::io::Write;
+    let mut child = Command::new("sha256sum")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("sha256sum exec failed: {e}"))?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "sha256sum stdin unavailable".to_string())?;
+        stdin
+            .write_all(bytes)
+            .map_err(|e| format!("sha256sum write failed: {e}"))?;
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("sha256sum wait failed: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "sha256sum exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    parse_sha256_stdout(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse a 64-hex-char digest out of a `sha256sum` stdout line.
+/// Stdin-fed output is `<64hex>  -\n` — we accept any whitespace-
+/// separated first token.
+pub(crate) fn parse_sha256_stdout(stdout: &str) -> Result<String, String> {
+    stdout
+        .split_whitespace()
+        .next()
+        .filter(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| format!("sha256sum output malformed: {stdout:?}"))
+}
+
+/// Print the per-file ESP diff as a human-readable summary.
+/// Matches the Phase-1 outcome sentence from #181: "this stick is
+/// eligible — 3 files would change, 2 unchanged, `AEGIS_ISOS`
+/// preserved".
+///
+/// Output shape (per row):
+///   `CHANGED   /EFI/BOOT/BOOTX64.EFI  sha256:abc…→xyz…`
+///   `UNCHANGED /EFI/ubuntu/grub.cfg   sha256:abc…`
+///   `UNKNOWN   /vmlinuz               (current unreadable: …)`
+pub(crate) fn print_esp_diff(diff: &[EspFileDiff]) {
+    let mut changed = 0usize;
+    let mut unchanged = 0usize;
+    let mut unknown = 0usize;
+    for row in diff {
+        match row.status_label() {
+            "CHANGED" => changed += 1,
+            "UNCHANGED" => unchanged += 1,
+            _ => unknown += 1,
+        }
+    }
+    println!("ESP diff (current stick vs. fresh flash would install):");
+    for row in diff {
+        let status = row.status_label();
+        let detail = match (&row.current, &row.fresh) {
+            (Ok(cur), Ok(fresh)) => {
+                if cur == fresh {
+                    format!("sha256:{}…", &cur[..cur.len().min(16)])
+                } else {
+                    format!(
+                        "sha256:{}… -> {}…",
+                        &cur[..cur.len().min(16)],
+                        &fresh[..fresh.len().min(16)],
+                    )
+                }
+            }
+            (Err(e), _) => format!("(current unreadable: {e})"),
+            (_, Err(e)) => format!("(fresh unavailable: {e})"),
+        };
+        println!("  {status:<9} {:<30}  {detail}", row.esp_path);
+    }
+    println!();
+    println!(
+        "Summary: {changed} would change, {unchanged} unchanged, \
+         {unknown} inconclusive. AEGIS_ISOS preserved byte-for-byte."
+    );
+}
+
+/// `/dev/sda` + N → `/dev/sdaN` (SCSI/SATA), `/dev/nvme0n1` + N →
+/// `/dev/nvme0n1pN` (NVMe), etc. Duplicated from
+/// `flash::partition_path` to avoid cross-module pub-surface churn
+/// in this read-only PR — Phase 2 will consolidate (the destructive
+/// path will share the same resolution).
+#[allow(clippy::doc_markdown)]
+pub(crate) fn partition_path(dev: &Path, n: u32) -> PathBuf {
+    let s = dev.display().to_string();
+    let needs_p =
+        s.starts_with("/dev/nvme") || s.starts_with("/dev/mmcblk") || s.starts_with("/dev/loop");
+    if needs_p {
+        PathBuf::from(format!("{s}p{n}"))
+    } else {
+        PathBuf::from(format!("{s}{n}"))
+    }
 }
 
 fn print_help() {
@@ -779,5 +1083,339 @@ mod tests {
             }
             Eligibility::Eligible { .. } => panic!("expected Ineligible for missing device"),
         }
+    }
+
+    // ---------- Phase 1 of #181: ESP diff unit tests ----------
+
+    #[test]
+    fn partition_path_handles_scsi_nvme_and_loop() {
+        assert_eq!(
+            partition_path(Path::new("/dev/sda"), 1),
+            PathBuf::from("/dev/sda1"),
+        );
+        assert_eq!(
+            partition_path(Path::new("/dev/nvme0n1"), 2),
+            PathBuf::from("/dev/nvme0n1p2"),
+        );
+        assert_eq!(
+            partition_path(Path::new("/dev/mmcblk0"), 1),
+            PathBuf::from("/dev/mmcblk0p1"),
+        );
+        assert_eq!(
+            partition_path(Path::new("/dev/loop0"), 1),
+            PathBuf::from("/dev/loop0p1"),
+        );
+    }
+
+    #[test]
+    fn parse_sha256_stdout_extracts_64_hex_token() {
+        // sha256sum prints "<64hex>  <path>\n" or "<64hex>  -\n".
+        let out = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  -\n";
+        let got = parse_sha256_stdout(out).expect("should parse");
+        assert_eq!(got.len(), 64);
+        assert!(got.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn parse_sha256_stdout_rejects_malformed_and_short_tokens() {
+        assert!(parse_sha256_stdout("").is_err());
+        assert!(parse_sha256_stdout("nope  -\n").is_err());
+        // 63 chars — too short.
+        assert!(parse_sha256_stdout(&format!("{}  -\n", "a".repeat(63))).is_err());
+        // 65 chars — the filter hits the len() == 64 guard.
+        assert!(parse_sha256_stdout(&format!("{}  -\n", "a".repeat(65))).is_err());
+    }
+
+    #[test]
+    fn parse_sha256_stdout_normalizes_case_to_lower() {
+        let out = "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  -";
+        let got = parse_sha256_stdout(out).expect("parse");
+        assert_eq!(got, got.to_lowercase());
+    }
+
+    #[test]
+    fn sha256_stdin_produces_canonical_empty_string_digest() {
+        // Well-known: sha256("") = e3b0c442... . If sha256sum isn't
+        // on PATH, skip — unit tests must not depend on environment.
+        if which_sha256sum().is_err() {
+            return;
+        }
+        let got = sha256_stdin(b"").expect("hash empty bytes");
+        assert_eq!(
+            got,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        );
+    }
+
+    #[test]
+    fn sha256_stdin_hashes_known_payload() {
+        // sha256("hello\n") = ...
+        if which_sha256sum().is_err() {
+            return;
+        }
+        let got = sha256_stdin(b"hello\n").expect("hash");
+        assert_eq!(
+            got,
+            "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+        );
+    }
+
+    #[test]
+    fn mtype_sha256_rejects_non_absolute_esp_path() {
+        // Guard rail: callers MUST pass a leading-slash path.
+        // Without this guard, "/EFI/BOOT/BOOTX64.EFI" vs
+        // "EFI/BOOT/BOOTX64.EFI" would both compose to different
+        // mtools targets.
+        let dev = PathBuf::from("/dev/loopnonexistent1");
+        let err = mtype_sha256(&dev, "EFI/BOOT/BOOTX64.EFI").expect_err("should reject");
+        assert!(err.contains("must be absolute"), "{err}");
+    }
+
+    #[test]
+    fn esp_file_diff_would_change_semantics() {
+        let same = EspFileDiff {
+            role: "shim",
+            esp_path: "/EFI/BOOT/BOOTX64.EFI",
+            current: Ok("a".repeat(64)),
+            fresh: Ok("a".repeat(64)),
+        };
+        assert!(!same.would_change());
+        assert_eq!(same.status_label(), "UNCHANGED");
+
+        let differ = EspFileDiff {
+            role: "shim",
+            esp_path: "/EFI/BOOT/BOOTX64.EFI",
+            current: Ok("a".repeat(64)),
+            fresh: Ok("b".repeat(64)),
+        };
+        assert!(differ.would_change());
+        assert_eq!(differ.status_label(), "CHANGED");
+
+        // Either side missing must NOT report CHANGED — it's
+        // UNKNOWN. This invariant matters: a naive impl that
+        // `Ok != Err` would incorrectly say "would change".
+        let current_missing = EspFileDiff {
+            role: "shim",
+            esp_path: "/EFI/BOOT/BOOTX64.EFI",
+            current: Err("mtype not installed".to_string()),
+            fresh: Ok("a".repeat(64)),
+        };
+        assert!(!current_missing.would_change());
+        assert_eq!(current_missing.status_label(), "UNKNOWN");
+
+        let fresh_missing = EspFileDiff {
+            role: "shim",
+            esp_path: "/EFI/BOOT/BOOTX64.EFI",
+            current: Ok("a".repeat(64)),
+            fresh: Err("shim package not installed".to_string()),
+        };
+        assert!(!fresh_missing.would_change());
+        assert_eq!(fresh_missing.status_label(), "UNKNOWN");
+    }
+
+    #[test]
+    fn build_esp_diff_has_six_canonical_rows_matching_direct_install() {
+        // The six ESP destinations in `direct_install::stage_esp`
+        // MUST each get a diff row — this test catches silent
+        // drift if stage_esp adds a new file and build_esp_diff
+        // forgets to sample it.
+        let dev = PathBuf::from("/dev/nonexistent-test-loop");
+        let chain: Vec<HostChainEntry> = vec![];
+        let diff = build_esp_diff(&dev, &chain);
+        let paths: Vec<&str> = diff.iter().map(|d| d.esp_path).collect();
+        assert_eq!(diff.len(), 6);
+        assert!(paths.contains(&"/EFI/BOOT/BOOTX64.EFI"));
+        assert!(paths.contains(&"/EFI/BOOT/grubx64.efi"));
+        assert!(paths.contains(&"/EFI/BOOT/grub.cfg"));
+        assert!(paths.contains(&"/EFI/ubuntu/grub.cfg"));
+        assert!(paths.contains(&"/vmlinuz"));
+        assert!(paths.contains(&"/initrd.img"));
+    }
+
+    #[test]
+    fn build_esp_diff_pairs_fresh_side_from_host_chain_by_role() {
+        // Fresh side comes from the host chain via role matching.
+        // Here we hand it a synthetic chain — the real one calls
+        // sha256sum which we can't rely on in tests.
+        let dev = PathBuf::from("/dev/nonexistent-test-loop");
+        let chain = vec![
+            HostChainEntry {
+                role: "shim",
+                path: PathBuf::from("/usr/lib/shim/shimx64.efi.signed"),
+                sha256: Ok("a".repeat(64)),
+            },
+            HostChainEntry {
+                role: "kernel",
+                path: PathBuf::from("/boot/vmlinuz-6.8.0-virtual"),
+                sha256: Ok("b".repeat(64)),
+            },
+        ];
+        let diff = build_esp_diff(&dev, &chain);
+        let shim = diff
+            .iter()
+            .find(|d| d.esp_path == "/EFI/BOOT/BOOTX64.EFI")
+            .expect("shim row");
+        // current fails because dev doesn't exist — that's OK.
+        assert!(shim.current.is_err());
+        // fresh comes from the synthetic chain.
+        assert_eq!(shim.fresh.as_ref().ok(), Some(&"a".repeat(64)));
+        // grub.cfg rows get the Phase-1 "not sampled" error on
+        // the fresh side because the chain has no grub_cfg entry.
+        let grub_cfg = diff
+            .iter()
+            .find(|d| d.esp_path == "/EFI/BOOT/grub.cfg")
+            .expect("grub.cfg row");
+        let err = grub_cfg.fresh.as_ref().expect_err("fresh is Err today");
+        assert!(err.contains("not sampled in Phase 1"), "{err}");
+    }
+
+    #[test]
+    fn to_wire_file_diff_maps_ok_side_into_sha256_field() {
+        let internal = EspFileDiff {
+            role: "shim",
+            esp_path: "/EFI/BOOT/BOOTX64.EFI",
+            current: Ok("a".repeat(64)),
+            fresh: Ok("b".repeat(64)),
+        };
+        let wire = to_wire_file_diff(&internal);
+        assert_eq!(wire.role, "shim");
+        assert_eq!(wire.esp_path, "/EFI/BOOT/BOOTX64.EFI");
+        assert_eq!(
+            wire.current_sha256.as_deref(),
+            Some("a".repeat(64).as_str())
+        );
+        assert!(wire.current_error.is_none());
+        assert_eq!(wire.fresh_sha256.as_deref(), Some("b".repeat(64).as_str()));
+        assert!(wire.fresh_error.is_none());
+        assert!(wire.would_change);
+    }
+
+    #[test]
+    fn to_wire_file_diff_maps_err_side_into_error_field() {
+        let internal = EspFileDiff {
+            role: "kernel",
+            esp_path: "/vmlinuz",
+            current: Err("mtype not installed".to_string()),
+            fresh: Ok("b".repeat(64)),
+        };
+        let wire = to_wire_file_diff(&internal);
+        assert!(wire.current_sha256.is_none());
+        assert_eq!(wire.current_error.as_deref(), Some("mtype not installed"));
+        assert_eq!(wire.fresh_sha256.as_deref(), Some("b".repeat(64).as_str()));
+        // Missing current side => comparison inconclusive =>
+        // would_change MUST be false (not true).
+        assert!(!wire.would_change);
+    }
+
+    /// Helper: `which sha256sum` without pulling in a new dep.
+    /// Tests that need sha256sum skip when it's unavailable.
+    fn which_sha256sum() -> Result<(), ()> {
+        Command::new("sha256sum")
+            .arg("--version")
+            .output()
+            .map(|_| ())
+            .map_err(|_| ())
+    }
+
+    fn which_tool(bin: &str) -> Result<(), ()> {
+        Command::new(bin)
+            .arg("--version")
+            .output()
+            .map(|_| ())
+            .map_err(|_| ())
+    }
+
+    /// End-to-end fixture test: build a FAT32 image, `mcopy` a
+    /// known payload into the canonical `/EFI/BOOT/BOOTX64.EFI`
+    /// slot, then ask [`mtype_sha256`] to read it back. Asserts
+    /// the hash matches the host-side sha256sum of the same
+    /// payload.
+    ///
+    /// Skips silently when the mtools stack (`mkfs.vfat`,
+    /// `mcopy`, `mtype`, `sha256sum`, `dd`) isn't available —
+    /// we don't want to block CI runners that lack these
+    /// utilities; the lower-level unit tests above cover the
+    /// argument-plumbing logic.
+    #[test]
+    fn mtype_sha256_reads_back_known_payload_from_fat32_image() {
+        for tool in ["mkfs.vfat", "mcopy", "mtype", "sha256sum", "dd"] {
+            if which_tool(tool).is_err() {
+                return;
+            }
+        }
+        // test-only: tempdir for synthesizing a FAT32 image + running
+        // mtype against it. pid-suffixed, test-scope, test cleans up
+        // at the end of its own body. Not a security boundary — same
+        // pattern as flash.rs:617 for direct-install's work dir.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
+        let tmp_root = std::env::temp_dir();
+        let tmp = tmp_root.join(format!("aegis-update-phase1-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("mkdir tmp");
+        let img = tmp.join("esp.img");
+        // 4 MiB FAT32 image — smallest that mkfs.vfat will format
+        // cleanly as FAT32 on Debian 12 mtools.
+        let out = Command::new("dd")
+            .arg("if=/dev/zero")
+            .arg(format!("of={}", img.display()))
+            .arg("bs=1M")
+            .arg("count=16")
+            .arg("status=none")
+            .status()
+            .expect("dd");
+        assert!(out.success(), "dd failed");
+        let out = Command::new("mkfs.vfat")
+            .arg("-F")
+            .arg("32")
+            .arg("-n")
+            .arg("ESP")
+            .arg(&img)
+            .output()
+            .expect("mkfs.vfat");
+        assert!(
+            out.status.success(),
+            "mkfs.vfat failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // Stage a known payload at the canonical shim location.
+        let payload = tmp.join("shim.bin");
+        std::fs::write(&payload, b"aegis-boot phase-1 fixture payload\n").expect("write payload");
+        let expected =
+            sha256_stdin(b"aegis-boot phase-1 fixture payload\n").expect("hash payload on host");
+        // mmd to create ::/EFI/BOOT, then mcopy the payload in.
+        let s = img.display().to_string();
+        let mmd = Command::new("mmd")
+            .arg("-i")
+            .arg(&s)
+            .arg("::/EFI")
+            .arg("::/EFI/BOOT")
+            .output()
+            .expect("mmd");
+        assert!(
+            mmd.status.success(),
+            "mmd failed: {}",
+            String::from_utf8_lossy(&mmd.stderr)
+        );
+        let mcp = Command::new("mcopy")
+            .arg("-i")
+            .arg(&s)
+            .arg("--")
+            .arg(&payload)
+            .arg("::/EFI/BOOT/BOOTX64.EFI")
+            .output()
+            .expect("mcopy");
+        assert!(
+            mcp.status.success(),
+            "mcopy failed: {}",
+            String::from_utf8_lossy(&mcp.stderr)
+        );
+        // Now the code under test: read back via mtype_sha256.
+        let got = mtype_sha256(&img, "/EFI/BOOT/BOOTX64.EFI")
+            .expect("mtype_sha256 should read the fixture");
+        assert_eq!(got, expected);
+        // Negative case: missing file should produce an Err, not panic.
+        let missing = mtype_sha256(&img, "/EFI/BOOT/grubx64.efi");
+        assert!(missing.is_err(), "missing file should be Err");
+        // Cleanup best-effort — don't fail the test on leftover tmp.
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

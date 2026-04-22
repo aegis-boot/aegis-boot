@@ -99,7 +99,14 @@ pub const VERIFY_SCHEMA_VERSION: u32 = 1;
 /// Locked schema version for the [`UpdateReport`] envelope emitted
 /// by `aegis-boot update --json`. Independent of the other envelope
 /// contracts.
-pub const UPDATE_SCHEMA_VERSION: u32 = 1;
+///
+/// Bumped to `2` in Phase 1 of #181 when
+/// [`UpdateEligibility::Eligible`] gained the `esp_diff` field.
+/// The field carries `serde(default)` + `skip_serializing_if =
+/// "Vec::is_empty"`, so a v1 payload still parses as a v2
+/// `UpdateReport` (the diff just comes through empty) — i.e. the
+/// bump is additive and backward-compatible for downstream parsers.
+pub const UPDATE_SCHEMA_VERSION: u32 = 2;
 
 /// Locked schema version for the [`RecommendReport`] envelope
 /// emitted by `aegis-boot recommend --json`. Independent of the
@@ -723,6 +730,18 @@ pub enum UpdateEligibility {
         /// kernel / initrd). Each carries either `sha256` (success)
         /// or `error` (could not be hashed / located).
         host_chain: Vec<UpdateChainEntry>,
+        /// Per-file diff between the current ESP contents and what
+        /// a fresh flash would produce. Phase 1 of #181:
+        /// informational only — eligibility does not depend on the
+        /// diff. Empty when the ESP could not be read (e.g.
+        /// missing `mtype`, partition unreadable); in that case the
+        /// operator still gets the [`host_chain`] preview.
+        ///
+        /// Added in `schema_version = 2`. `serde(default)` +
+        /// `skip_serializing_if = "Vec::is_empty"` make the bump
+        /// additive: v1 payloads parse as v2 with an empty vec.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        esp_diff: Vec<UpdateFileDiff>,
     },
     /// The stick cannot accept a rotation. Carries the operator-
     /// readable reason (device not removable, no attestation on
@@ -769,6 +788,61 @@ pub enum UpdateChainResult {
         /// Human-readable error.
         error: String,
     },
+}
+
+/// Per-file diff row between what's currently on the stick's ESP
+/// and what a fresh `mkusb` / direct-install flash would write.
+/// One row per canonical ESP destination (see
+/// `direct_install::ESP_DEST_*`).
+///
+/// Semantics of the hash/error pairs:
+///
+/// * `current_sha256` is `None` when the ESP file couldn't be read
+///   (file absent, `mtype` missing, permission denied); in that
+///   case `current_error` carries the operator-facing reason.
+/// * `fresh_sha256` is `None` when the host-side source couldn't
+///   be hashed (package not installed, kernel glob missed, etc);
+///   `fresh_error` carries the reason.
+/// * `would_change` is the Phase-1 verdict the operator cares
+///   about: `true` only when both hashes are present AND they
+///   differ. When either hash is absent the comparison is
+///   inconclusive and `would_change` is `false` — the operator
+///   sees the error field and knows the answer isn't "yes it
+///   would change", it's "we couldn't tell".
+///
+/// Added in `UPDATE_SCHEMA_VERSION = 2` (Phase 1 of #181).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct UpdateFileDiff {
+    /// Role in the signed chain: `shim`, `grub`, `grub_cfg_boot`,
+    /// `grub_cfg_ubuntu`, `kernel`, `initrd`. One entry per
+    /// canonical destination (the two `grub.cfg` targets get
+    /// separate rows because `mkusb.sh` writes both).
+    pub role: String,
+    /// Destination path on the ESP, e.g. `/EFI/BOOT/BOOTX64.EFI`
+    /// (no `::` mtools prefix — stripped for consumers that want
+    /// an operator-readable path).
+    pub esp_path: String,
+    /// Lowercase hex sha256 of the file currently on the stick's
+    /// ESP. `None` when unreadable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_sha256: Option<String>,
+    /// Operator-readable error explaining why `current_sha256`
+    /// is absent. `None` when the read succeeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_error: Option<String>,
+    /// Lowercase hex sha256 of what a fresh flash would install.
+    /// `None` when the host-side source couldn't be hashed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fresh_sha256: Option<String>,
+    /// Operator-readable error explaining why `fresh_sha256` is
+    /// absent. `None` when the hash succeeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fresh_error: Option<String>,
+    /// `true` when both hashes are present and differ. `false`
+    /// when they match, OR when either hash is absent (see struct
+    /// docs for the rationale).
+    pub would_change: bool,
 }
 
 /// Envelope emitted by `aegis-boot recommend --json`. Untagged
@@ -1625,6 +1699,15 @@ mod tests {
                         },
                     },
                 ],
+                esp_diff: vec![UpdateFileDiff {
+                    role: "shim".to_string(),
+                    esp_path: "/EFI/BOOT/BOOTX64.EFI".to_string(),
+                    current_sha256: Some("b".repeat(64)),
+                    current_error: None,
+                    fresh_sha256: Some("a".repeat(64)),
+                    fresh_error: None,
+                    would_change: true,
+                }],
             },
         }
     }
@@ -1641,8 +1724,69 @@ mod tests {
     }
 
     #[test]
-    fn update_schema_version_is_one() {
-        assert_eq!(UPDATE_SCHEMA_VERSION, 1);
+    fn update_schema_version_is_two() {
+        // Bumped 1 -> 2 in #181 Phase 1 (added `esp_diff`).
+        // `serde(default)` + skip_serializing_if empty vec makes the
+        // bump backward-compatible — see
+        // `update_report_parses_v1_payload_without_esp_diff`.
+        assert_eq!(UPDATE_SCHEMA_VERSION, 2);
+    }
+
+    #[test]
+    fn update_report_parses_v1_payload_without_esp_diff() {
+        // Forward-compatibility: old producers pre-#181 Phase 1 emit
+        // UpdateReport without `esp_diff`. A current parser MUST
+        // accept that — the field defaults to an empty Vec.
+        let v1_body = r#"{
+            "schema_version": 1,
+            "tool_version": "0.14.1",
+            "device": "/dev/sda",
+            "eligibility": "ELIGIBLE",
+            "disk_guid": "00000000-0000-0000-0000-000000000001",
+            "attestation_path": "/tmp/att.json",
+            "host_chain": []
+        }"#;
+        let parsed: UpdateReport = serde_json::from_str(v1_body).expect("v1 parse");
+        match parsed.eligibility {
+            UpdateEligibility::Eligible { esp_diff, .. } => assert!(esp_diff.is_empty()),
+            UpdateEligibility::Ineligible { .. } => panic!("expected ELIGIBLE"),
+        }
+    }
+
+    #[test]
+    fn update_file_diff_omits_none_fields_on_wire() {
+        let d = UpdateFileDiff {
+            role: "shim".to_string(),
+            esp_path: "/EFI/BOOT/BOOTX64.EFI".to_string(),
+            current_sha256: Some("a".repeat(64)),
+            current_error: None,
+            fresh_sha256: Some("a".repeat(64)),
+            fresh_error: None,
+            would_change: false,
+        };
+        let body = serde_json::to_string(&d).expect("serialize");
+        assert!(body.contains("\"current_sha256\""));
+        assert!(body.contains("\"fresh_sha256\""));
+        // None-valued error fields must not leak onto the wire.
+        assert!(!body.contains("current_error"), "{body}");
+        assert!(!body.contains("fresh_error"), "{body}");
+        assert!(body.contains("\"would_change\":false"));
+    }
+
+    #[test]
+    fn update_file_diff_round_trips_with_errors() {
+        let d = UpdateFileDiff {
+            role: "kernel".to_string(),
+            esp_path: "/vmlinuz".to_string(),
+            current_sha256: None,
+            current_error: Some("mtype exited non-zero".to_string()),
+            fresh_sha256: Some("f".repeat(64)),
+            fresh_error: None,
+            would_change: false,
+        };
+        let body = serde_json::to_string(&d).expect("serialize");
+        let back: UpdateFileDiff = serde_json::from_str(&body).expect("parse");
+        assert_eq!(d, back);
     }
 
     #[test]
