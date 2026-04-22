@@ -192,7 +192,7 @@ One-shot: on first rescue-tui run after this ADR ships, read `/run/aegis-boot/la
 ## 7. Non-goals
 
 - **TPM-sealed last-choice.** See §5.1.
-- **Signed last-choice file.** A simple HMAC with a key that lives on the same stick adds no security. Proper signing requires a key not on the stick, which is the TPM / remote-attestation story.
+- **Signed last-choice file.** A simple HMAC with a key that lives on the same stick adds no security. Proper signing requires a key not on the stick, which is the TPM / remote-attestation story — and now also the #366 / ADR 0002 key-management story.
 - **Cmdline-override persistence.** See §6.2.
 - **Multi-stick-identity tracking** (e.g., "this stick's last choice was X on machine A, Y on machine B"). The stick itself is the identity unit.
 - **Expiry / TTL on last-choice.** Zero operator demand; adds a clock-skew failure mode. Revisit if the field proves useful.
@@ -233,7 +233,7 @@ Three sub-issues under #375, merged in order. Each is independently reviewable; 
 ## 9. Open questions
 
 - **Should `AEGIS_ISOS/.aegis-state/` get the `hidden` exFAT attribute, or is the leading-dot convention enough?** Leaning "leading dot only" — Linux clients ignore the exFAT hidden bit anyway, and setting it requires an `exfatprogs` call the rescue kernel doesn't currently have. Keep as a Phase-2 review-time question.
-- **Cross-ADR: when #366's key-management ADR lands, does it want to piggyback `.aegis-state/` for anything?** The directory is a natural spot for per-stick state that isn't signed-chain. Leave to #366's author; this ADR claims only `last-choice.json`.
+- **Cross-ADR: does #366 / ADR 0002's key-management story want to piggyback `.aegis-state/` for anything?** The directory is a natural spot for per-stick state that isn't signed-chain. Leave to ADR 0002's follow-ups; this ADR claims only `last-choice.json`.
 
 ---
 
@@ -245,9 +245,10 @@ Three sub-issues under #375, merged in order. Each is independently reviewable; 
 - `crates/aegis-cli/src/attest.rs:3-11` (attestation store on operator host, explicitly orthogonal)
 - `docs/validation/REAL_HARDWARE_REPORT_132.md` (scope-mismatch discovery, Phase 3 test basis)
 - ADR 0001 `docs/adr/0001-runtime-architecture.md` (lockdown-integrity + signed-chain context)
+- ADR 0002 `docs/architecture/KEY_MANAGEMENT.md` (#366, landed same day — this ADR's non-goal "signed last-choice" is in its domain)
 
 ---
 
 ## 11. Numbering note
 
-This file is `docs/architecture/LAST_BOOTED_PERSISTENCE.md` per the directing issue #375 (the `docs/architecture/` directory was empty at the time of writing; `docs/adr/` holds ADR 0001). The body claims ADR **0002**. A companion key-management ADR authored against #366 lands the same day. If both try to claim 0002 at merge time, this one becomes **0003** — the content is number-agnostic; only the header line at the top and any inbound link to "ADR 0002" need to update. The parallel author can claim 0002 without coordination cost.
+This file lives at `docs/architecture/LAST_BOOTED_PERSISTENCE.md` per the directing issue #375. The parallel #366 key-management ADR created `docs/architecture/` and claimed ADR 0002 by merging first on `docs/366-key-management-adr`. Per the coordination rule (file the next unused number if there's a conflict), this ADR takes **0003**. `docs/adr/0001-runtime-architecture.md` remains the earliest; future ADRs under `docs/architecture/` continue from 0004.
