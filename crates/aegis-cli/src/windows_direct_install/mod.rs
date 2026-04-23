@@ -15,4 +15,5 @@
 //! diskpart_script`) compile + test on any host so the logic stays
 //! reviewable from Linux.
 
+pub(crate) mod format;
 pub(crate) mod partition;
