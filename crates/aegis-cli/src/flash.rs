@@ -770,7 +770,9 @@ fn write_manifest_stage(
     // abort the flash — the ESP copy is the source of truth.
     if let Err(e) = write_host_side_attestation(&body, &manifest.device.disk_guid) {
         eprintln!("warning: host-side attestation mirror failed: {e}");
-        eprintln!("(the ESP manifest is still in place; `aegis-boot update` may not find this stick until the mirror succeeds on a re-flash)");
+        eprintln!(
+            "(the ESP manifest is still in place; `aegis-boot update` may not find this stick until the mirror succeeds on a re-flash)"
+        );
     }
 
     Ok(())
