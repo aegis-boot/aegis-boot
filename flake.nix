@@ -87,8 +87,8 @@
             gcc
             pkg-config
             openssl
-            python311
-            python311Packages.pip
+            python312
+            python312Packages.pip
             nasm
             util-linux
             acpica-tools
