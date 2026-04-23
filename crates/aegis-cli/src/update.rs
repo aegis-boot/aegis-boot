@@ -60,6 +60,7 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
     let mut json_mode = false;
     let mut apply_mode = false;
     let mut experimental_apply = false;
+    let mut rollback_mode = false;
     for a in args {
         match a.as_str() {
             "--help" | "-h" => {
@@ -74,6 +75,12 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
             // executor ships in Phase 2b once OVMF E2E validates.
             "--apply" => apply_mode = true,
             "--experimental-apply" => experimental_apply = true,
+            // #181 Phase 2b follow-up — restore `.bak` files from a
+            // prior `--apply` run. Independent from `--apply`; no
+            // `--experimental` gating because it's a recovery verb
+            // (operator is explicitly rolling back, not committing
+            // new writes).
+            "--rollback" => rollback_mode = true,
             arg if arg.starts_with("--") => {
                 eprintln!("aegis-boot update: unknown option '{arg}'");
                 eprintln!("(in-place update is under active development — only the");
@@ -110,6 +117,23 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
         return Err(2);
     };
     let dev = PathBuf::from(d);
+
+    if rollback_mode {
+        // #181 Phase 2b follow-up: restore .bak files from a prior
+        // `--apply` run. Independent of `--apply` / eligibility —
+        // rollback is a recovery verb; operator knows what they're
+        // undoing.
+        #[cfg(target_os = "linux")]
+        return run_rollback(&dev, json_mode);
+        #[cfg(not(target_os = "linux"))]
+        {
+            eprintln!(
+                "aegis-boot update --rollback: Linux-only; cross-platform \
+                 rotation ships under #367 Phase D."
+            );
+            return Err(2);
+        }
+    }
 
     if !json_mode {
         println!("aegis-boot update — eligibility check");
@@ -1302,6 +1326,111 @@ fn dispatch_rotation(
             } else {
                 eprintln!("Rollback complete. Stick restored to pre-apply state as best we could.");
             }
+            Err(1)
+        }
+    }
+}
+
+/// `aegis-boot update --rollback <device>` — restore `.bak` files
+/// left behind by a prior `--apply` run. For each canonical ESP slot
+/// that has a matching `.bak`, mdel the current file and mren the
+/// `.bak` over it. Slots without a `.bak` are silently skipped
+/// (nothing to restore).
+///
+/// Does NOT require eligibility to pass — rollback is a recovery
+/// verb, and an operator who's half-broken the stick via `--apply`
+/// should always be able to unwind.
+///
+/// Reports per-slot outcome + overall summary.
+#[cfg(target_os = "linux")]
+fn run_rollback(dev: &Path, json_mode: bool) -> Result<(), u8> {
+    use crate::update_apply::{RollbackAction, execute_rollback};
+
+    let part1_dev = partition_path(dev, 1);
+
+    // Scan for .bak files on each canonical ESP slot. Using a probe
+    // via mtype_sha256 (cheapest existence check that's already in
+    // the codebase) — if it returns Ok, .bak exists; Err means
+    // absent-or-unreadable, either way we skip. False positives are
+    // caught by the subsequent `execute_rollback` call — which
+    // collects per-action errors rather than short-circuits.
+    let mut actions: Vec<RollbackAction> = Vec::new();
+    let mut probed: Vec<(&'static str, &'static str, bool)> = Vec::new();
+    for (role, esp_path, _source) in ESP_DIFF_SLOTS {
+        let bak_path = format!("{esp_path}.bak");
+        let present = mtype_sha256(&part1_dev, &bak_path).is_ok();
+        probed.push((role, esp_path, present));
+        if present {
+            actions.push(RollbackAction::RestoreFromBak { esp_path });
+        }
+    }
+
+    if actions.is_empty() {
+        if json_mode {
+            let doc = serde_json::json!({
+                "schema_version": 1,
+                "device": dev.display().to_string(),
+                "action": "rollback",
+                "restored": [],
+                "message": "no .bak files found — nothing to roll back",
+            });
+            if let Ok(body) = serde_json::to_string_pretty(&doc) {
+                println!("{body}");
+            }
+        } else {
+            println!("aegis-boot update --rollback — {}", dev.display());
+            println!();
+            println!("No `.bak` files found on the ESP. Nothing to roll back.");
+            println!("(`.bak` files are created by `aegis-boot update --apply`;");
+            println!(" if you haven't run that, there's nothing to undo.)");
+        }
+        return Ok(());
+    }
+
+    if !json_mode {
+        println!("aegis-boot update --rollback — {}", dev.display());
+        println!();
+        println!("Found .bak files for {} slot(s):", actions.len());
+        for (role, esp_path, present) in &probed {
+            if *present {
+                println!("  [{role}] {esp_path}.bak → {esp_path}");
+            }
+        }
+        println!();
+        println!("Restoring…");
+    }
+
+    match execute_rollback(&actions, &part1_dev) {
+        Ok(()) => {
+            if json_mode {
+                let restored: Vec<&str> = probed.iter().filter(|p| p.2).map(|p| p.1).collect();
+                let doc = serde_json::json!({
+                    "schema_version": 1,
+                    "device": dev.display().to_string(),
+                    "action": "rollback",
+                    "restored": restored,
+                });
+                if let Ok(body) = serde_json::to_string_pretty(&doc) {
+                    println!("{body}");
+                }
+            } else {
+                println!(
+                    "Rollback complete: {} slot(s) restored from `.bak`.",
+                    actions.len()
+                );
+                println!("AEGIS_ISOS preserved byte-for-byte (not touched during rollback).");
+            }
+            Ok(())
+        }
+        Err(errs) => {
+            eprintln!("Rollback encountered errors:");
+            for e in &errs {
+                eprintln!("  - {e}");
+            }
+            eprintln!();
+            eprintln!("Stick may be in an inconsistent state. Manually inspect:");
+            eprintln!("  mdir -i {}1 ::/", dev.display());
+            eprintln!("  mdir -i {}1 ::/EFI/BOOT/", dev.display());
             Err(1)
         }
     }
