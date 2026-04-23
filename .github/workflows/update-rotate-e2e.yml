@@ -104,9 +104,17 @@ jobs:
             || { echo "update should detect vmlinuz drift"; exit 1; }
 
       - name: "--apply --experimental-apply must complete + refresh manifest"
+        env:
+          # Same value flash used — update re-renders grub.cfg via
+          # render_grub_cfg() which honors this env var. Without it,
+          # the rotation defaults grub.cfg to entry-0 (tty0-primary)
+          # and the post-rotation QEMU boot step loses the serial
+          # console. sudo -E preserves the var across the uid jump.
+          MKUSB_GRUB_DEFAULT: "1"
+          AEGIS_ALLOW_LOOP_DEVICE: "1"
         run: |
           LOOP=$(cat /tmp/update-rotate.loop)
-          sudo ./target/release/aegis-boot update "$LOOP" \
+          sudo -E ./target/release/aegis-boot update "$LOOP" \
             --apply --experimental-apply \
             | tee /tmp/update-apply.out
           grep -q 'Rotation complete' /tmp/update-apply.out \
