@@ -59,6 +59,27 @@ Backend trait `<B as Backend>::Error` lost its default `'static` bound. Added `w
 - **Actions hygiene:** `cachix/install-nix-action` v27 → v31; `sign-identity-transition.yml` checkout@v4 → v5 for consistency.
 - **Node 20 deprecation** tracked in [#409](https://github.com/aegis-boot/aegis-boot/issues/409) — GitHub auto-forces Node 24 on 2026-06-02. No action needed until then; plan to opt-in test early May 2026 via `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`.
 
+### #181 Phase 2b progress — in-place update executor (not yet CLI-wired)
+
+Two landed PRs complete the state-machine half of Phase 2b (destructive in-place update executor). The CLI flip + OVMF E2E ship together in a follow-up so the gate-that-lets-destructive-writes-out demands proof-of-boot after update.
+
+- **[#425](https://github.com/aegis-boot/aegis-boot/pull/425)** — mtools `mren` + `mdel` argv builders. 4 unit tests cover argv shape + `--` injection so paths starting with `-` can't be misread as flags.
+- **[#426](https://github.com/aegis-boot/aegis-boot/pull/426)** — `RotationSources` + `execute_rotation` + `execute_rollback`. State machine consumes Phase 2a's planner output: mcopy src → `.new`, mark Staged; mren original → `.bak`; mren `.new` → original; mark Rotated. Rollback walker executes `rollback_plan` actions best-effort (collects per-action errors rather than short-circuiting). All Linux-only per `cfg(target_os = "linux")` — `direct_install` is Linux-specific; cross-platform rotation ships under #367 Phase D.
+
+### Real-hardware validation — ADR 0003 load + save paths
+
+Validated end-to-end on real USB hardware (SanDisk Cruzer 29.8 GB / Framework Laptop / kernel 6.14.0-37 / OVMF SecBoot enforcing) with QEMU USB passthrough of `/dev/sda`.
+
+- **Load path** — [#423](https://github.com/aegis-boot/aegis-boot/pull/423): seeded `.aegis-state/last-choice.json` on real exFAT, booted under SecBoot enforcing, observed `rescue-tui: restored last choice idx=0 iso=...` confirming the stripped cross-reboot form survives VM restart + is applied on startup.
+- **Save path under duress** — [#423](https://github.com/aegis-boot/aegis-boot/pull/423) addendum #2: 10/10 kill-mid-save runs passed with 0 JSON corruption across random kill timings in 10–500ms. Baseline throughput: 7.35 ms per save (write `.tmp` + rename over + dir fsync). Stale `.tmp` leftovers are benign per atomic-rename semantics.
+- **Harness shipped** — [#424](https://github.com/aegis-boot/aegis-boot/pull/424): `scripts/validation/` directory with `save_smoke.rs`, `boot-ovmf.sh`, `kill-mid-save.sh`, and a runbook README so other maintainers / future sessions can reproduce on their own hardware.
+
+Residual gap for multi-vendor closure: mid-kexec physical power-pull on Framework / Dell / ThinkPad. SIGKILL ≠ real power cut; the flash-barrier question is device-specific.
+
+### SysRq help-overlay: full REISUB sequence ([#422](https://github.com/aegis-boot/aegis-boot/pull/422))
+
+The rescue-tui `?` help overlay listed three SysRq bindings (b/s/e). Expanded to the full REISUB sequence (R/E/I/S/U/B) so operators hitting the keys in wrong order don't defeat the "safe forced reboot" property. Panel grew 70×20 → 80×32 to fit without wrap-clipping. `kernel.sysrq=1` was already enabled by `scripts/build-initramfs.sh` so the keys work at runtime.
+
 ### Close-outs
 
 - Epic **#51** (crates.io publishing) closed — 6 crates live (`iso-parser`, `iso-probe`, `kexec-loader`, `aegis-wire-formats`, `aegis-fitness`, `aegis-bootctl`) at v0.16.0 via Trusted Publishing (OIDC, no long-lived tokens).
