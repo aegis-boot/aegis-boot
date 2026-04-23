@@ -192,7 +192,7 @@ fn handle_eligible(
         print_rotation_plan(&diff);
         println!();
         #[cfg(target_os = "linux")]
-        return apply_rotation(dev, &esp_part, &diff);
+        return apply_rotation(dev, &esp_part, &diff, attestation_path);
         #[cfg(not(target_os = "linux"))]
         {
             println!(
@@ -1186,7 +1186,12 @@ pub(crate) fn attestation_dir() -> PathBuf {
 /// 5. On failure, invoke `execute_rollback` with the progress trace +
 ///    surface both the original error and any rollback errors.
 #[cfg(target_os = "linux")]
-fn apply_rotation(dev: &Path, part1_dev: &Path, diff: &[EspFileDiff]) -> Result<(), u8> {
+fn apply_rotation(
+    dev: &Path,
+    part1_dev: &Path,
+    diff: &[EspFileDiff],
+    attestation_path: &Path,
+) -> Result<(), u8> {
     use crate::update_apply::plan_rotation;
 
     let plan = plan_rotation(diff);
@@ -1207,7 +1212,105 @@ fn apply_rotation(dev: &Path, part1_dev: &Path, diff: &[EspFileDiff]) -> Result<
         plan.len(),
         part1_dev.display()
     );
-    dispatch_rotation(dev, part1_dev, &plan, &sources)
+    let rotation_result = dispatch_rotation(dev, part1_dev, &plan, &sources);
+
+    // On successful rotation: refresh the attestation manifest (both
+    // host-side + ESP-side copies). Failure warns but doesn't fail —
+    // the rotation already landed; a stale manifest causes
+    // `verify --stick` drift on rotated slots, which is recoverable.
+    if rotation_result.is_ok()
+        && let Err(e) = refresh_manifest_after_rotate(attestation_path, part1_dev, &plan, &sources)
+    {
+        eprintln!("warning: manifest refresh after rotation failed: {e}");
+        eprintln!(
+            "(rotation landed successfully; `verify --stick` will show drift on rotated files until the manifest is refreshed)"
+        );
+    }
+
+    rotation_result
+}
+
+/// Read the current attestation manifest, update `esp_files[]` entries
+/// for rotated slots with their new sha256 + size, bump `sequence`,
+/// update `tool_version`, and write the manifest back to both the
+/// host-side attestations dir AND the ESP's canonical
+/// `::/aegis-boot-manifest.json`. Linux-only.
+#[cfg(target_os = "linux")]
+fn refresh_manifest_after_rotate(
+    attestation_path: &Path,
+    part1_dev: &Path,
+    plan: &[crate::update_apply::RotationStep],
+    sources: &crate::update_apply::RotationSources<'_>,
+) -> Result<(), String> {
+    // 1. Read + parse existing manifest.
+    let body = std::fs::read_to_string(attestation_path)
+        .map_err(|e| format!("read {}: {e}", attestation_path.display()))?;
+    let mut manifest: aegis_wire_formats::Manifest =
+        serde_json::from_str(&body).map_err(|e| format!("parse manifest: {e}"))?;
+
+    // 2. For each rotated step, find the matching EspFileEntry and
+    //    update sha256 + size. Manifest paths are `::/`-prefixed;
+    //    planner's `esp_path` is bare. Match by prepending `::`.
+    for step in plan {
+        let mtools_path = format!("::{}", step.esp_path);
+        let Some(entry) = manifest
+            .esp_files
+            .iter_mut()
+            .find(|e| e.path == mtools_path)
+        else {
+            eprintln!(
+                "warning: rotated slot {mtools_path} not in manifest.esp_files[] — skipping entry update"
+            );
+            continue;
+        };
+        let Some(src) = sources.source_for(step.role) else {
+            continue;
+        };
+        let size = std::fs::metadata(src)
+            .map(|m| m.len())
+            .map_err(|e| format!("stat {}: {e}", src.display()))?;
+        entry.sha256.clone_from(&step.fresh_sha256);
+        entry.size_bytes = size;
+    }
+
+    // 3. Bump sequence + tool_version so verifiers know this is newer
+    //    than what was flashed.
+    manifest.sequence = manifest.sequence.saturating_add(1);
+    manifest.tool_version = format!("aegis-boot {}", env!("CARGO_PKG_VERSION"));
+
+    // 4. Serialize + write both copies.
+    let new_body =
+        serde_json::to_string_pretty(&manifest).map_err(|e| format!("serialize manifest: {e}"))?;
+    std::fs::write(attestation_path, &new_body)
+        .map_err(|e| format!("write host-side {}: {e}", attestation_path.display()))?;
+
+    let tmp =
+        tempfile::NamedTempFile::new().map_err(|e| format!("tempfile for ESP manifest: {e}"))?;
+    std::fs::write(tmp.path(), &new_body).map_err(|e| format!("stage ESP manifest body: {e}"))?;
+    let dev_str = part1_dev.display().to_string();
+    let argv = crate::direct_install::build_mcopy_argv(
+        &dev_str,
+        tmp.path(),
+        crate::direct_install_manifest::MANIFEST_ESP_PATH,
+    );
+    let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let out = std::process::Command::new("sudo")
+        .args(&argv_refs)
+        .output()
+        .map_err(|e| format!("mcopy exec: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "mcopy ESP manifest: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+
+    println!(
+        "Manifest refreshed: sequence bumped to {}, {} slot(s) updated.",
+        manifest.sequence,
+        plan.len()
+    );
+    Ok(())
 }
 
 /// Owned host-side-source paths the rotation executor mcopies from.
