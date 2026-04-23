@@ -34,12 +34,21 @@
 //! This module ships the pure-fn builders + the `#[cfg(windows)]`
 //! subprocess wrapper. The builders are exercised by unit tests
 //! on any host; the subprocess wrapper only compiles on Windows.
+//!
+//! # Dead-code allow
+//!
+//! Everything in this module is scaffolding awaiting wiring in the
+//! future CLI-integration phase (post #450). The unit tests keep the
+//! pure-fn side exercised, but no runtime caller exists yet. Module-
+//! scoped `allow(dead_code)` because stable Rust's dead-code detection
+//! on the Windows compile target would otherwise gate our CI.
+
+#![allow(dead_code)]
 
 use crate::constants::ESP_SIZE_MB;
 
 /// Why a partition request was rejected at the pure-fn layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum PartitionBuildError {
     /// Caller passed disk 0 — almost certainly the OS boot drive on
     /// Windows. Refuse without even asking the operator.
@@ -82,7 +91,6 @@ impl std::fmt::Display for PartitionBuildError {
 /// Refuses disk 0 unconditionally — even an operator who insists via
 /// `--yes` shouldn't be able to clean the OS boot drive from this
 /// code path.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn build_diskpart_script(physical_drive: u32) -> Result<String, PartitionBuildError> {
     if physical_drive == 0 {
         return Err(PartitionBuildError::BootDriveRefused);
