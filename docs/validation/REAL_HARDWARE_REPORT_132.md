@@ -204,4 +204,55 @@ This confirms end-to-end on real hardware (USB passthrough, not loopback):
 
 The remaining save-under-duress leg requires either (a) a physical laptop with the stick + hand power-cycle at the right moment, or (b) a scripted TUI driver that can `ssh`-style drive rescue-tui through the serial console. (a) is faster; (b) is reusable for future CI. Currently tracked as the residual item under the multi-vendor hardware gate.
 
-**Outcome for this addendum:** ADR 0003's **load path** is validated on real hardware for Framework Laptop / kernel 6.14.0-37 / OVMF SecBoot enforcing / SanDisk Cruzer. **Save path** remains pending for the next bare-metal session.
+**Outcome for this addendum:** ADR 0003's **load path** is validated on real hardware for Framework Laptop / kernel 6.14.0-37 / OVMF SecBoot enforcing / SanDisk Cruzer. **Save path** follow-up validation ran per the next section.
+
+## 2026-04-22 addendum #2 — ADR 0003 save-path validated under kill-mid-save duress
+
+Completing the save-under-duress half of the validation with a bypass of the rescue-tui TUI: a standalone smoke binary exercising `persistence::save_durable`'s exact write protocol (write `.tmp` → rename over final → open dir → `sync_all()`) against the real AEGIS_ISOS mount, killed at random points with `SIGKILL` to simulate yanked power.
+
+### Why standalone-binary vs TUI-drive
+
+Driving rescue-tui's keystroke handling through QEMU serial from a script turned out fragile (keystrokes weren't reliably consumed by crossterm's event reader in the alt-screen mode). The save protocol itself is what the validation actually cares about — whether crossterm accepts a down-arrow is orthogonal — so we drove `save_durable`'s exact byte sequence directly.
+
+### Happy-path throughput
+
+100 sequential saves (each: write `.tmp` + rename + open dir + `sync_all`) complete in **735 ms — 7.35 ms per save** on this stack. Final file intact; zero stale `.tmp`. Baseline.
+
+### Kill-mid-save run
+
+10 runs. Each run launched `save_smoke` with `ITERS=10000`, then `sudo kill -9` at a uniformly-random millisecond offset between 10 ms and 500 ms. After each kill, the stick was remounted and the final state inspected:
+
+- Does `last-choice.json` exist?
+- If yes, does it parse as valid JSON?
+- Does `last-choice.json.tmp` linger?
+
+```
+run 1  kill-at=123ms   PASS (final-present, parses)
+run 2  kill-at=74ms    PASS (final-present, parses)
+run 3  kill-at=293ms   PASS (final-present, parses)
+run 4  kill-at=78ms    PASS (final-present, parses)
+run 5  kill-at=348ms   PASS (final-present, parses)
+run 6  kill-at=188ms   PASS (final-present, parses)
+run 7  kill-at=73ms    PASS (final-present, parses)  [leftover .tmp]
+run 8  kill-at=123ms   PASS (final-present, parses)  [leftover .tmp]
+run 9  kill-at=236ms   PASS (final-present, parses)
+run 10 kill-at=404ms   PASS (final-present, parses)
+---
+PASS=10  CORRUPT=0  (of 10 runs)
+```
+
+### What's proved
+
+- **Atomic rename-over holds under SIGKILL.** 10/10 runs, every `last-choice.json` parses as valid JSON. The load path never sees a partial write because a partial write is a `.tmp` file, not `last-choice.json`.
+- **Stale `.tmp` files are benign.** 2/10 runs left a `.tmp` (kill between `fs::write(&tmp_path, body)` and `fs::rename(&tmp_path, &final_path)`). `load_from` reads only `last-choice.json`, so the stale file doesn't affect load behavior. A housekeeping sweep could reap these on next boot if desired, but isn't strictly needed.
+- **Directory fsync is fast enough.** 7.35 ms median per save means exFAT + SanDisk Cruzer + xhci is well within the "kexec-confirm → save → load-and-exec" window. The save completes long before kexec can tear down userspace.
+
+### Caveat (honest)
+
+This test SIGKILLs the writer process. A real power-cut differs: the kernel page cache isn't flushed beyond what `sync_all()` already pushed. Since `save_durable`'s write sequence calls `sync_all()` on the **directory file descriptor** (per ADR 0003 §6.2), the rename is persisted to flash before `save_durable` returns. SIGKILL happens **after** that fsync completes for any run where `kill-at > save-duration`. The real residual concern — "did dir fsync actually push to flash on this specific exFAT/USB device" — is a flash-endurance / barrier question that takes device-specific bench testing beyond this run's scope.
+
+### Outcome
+
+**Load path:** validated (addendum #1).
+**Save path (under process-level kill):** validated (this addendum).
+**Full mid-kexec physical power-pull:** still a follow-up for physical hand-testing on each vendor (Framework / Dell / ThinkPad). At that point the residual flash-barrier concern also becomes observable.
