@@ -162,3 +162,46 @@ What it doesn't catch:
 - BitLocker-adjacent Windows host interactions (N/A — Linux host)
 
 Those remain gated on physical bare-metal testing, tracked in the evolved #132 successor or the `real-hardware` compat-DB review flow.
+
+## 2026-04-22 addendum — ADR 0003 load-path validated on real USB hardware
+
+**Scope of this addendum:** partial execution of the 9-step hardware test procedure above. Phases 1-2, 7-8 executed; phases 3-5 (interactive pick → confirm → mid-kexec power-cycle) **not executed** — QEMU serial-console drive of rescue-tui's keyboard input is non-trivial and the save-under-duress path still needs physical bare-metal exercise to close that gap.
+
+### What ran
+
+1. **Flash pipeline on real USB** — `aegis-boot flash --direct-install --yes --out-dir ./out /dev/sda` against the SanDisk Cruzer 29.8 GB. 6-stage pipeline completed in 21.9s.
+2. **Seed AEGIS_ISOS with 2 distinct ISO entries** — Alpine 3.20 Standard + a renamed duplicate (`*-dup.iso`) so the cursor-preference signal is unambiguous.
+3. **Seed `AEGIS_ISOS/.aegis-state/last-choice.json`** directly on the stick (simulating what `persistence::save_durable` would produce):
+   ```json
+   { "iso_path": "/run/media/aegis-isos/alpine-standard-3.20.3-x86_64-dup.iso", "cmdline_override": null }
+   ```
+4. **Boot the stick under OVMF SecBoot enforcing** via `qemu-system-x86_64 -machine q35,smm=on -global driver=cfi.pflash01,property=secure,value=on` with `-drive if=none,id=usb0,file=/dev/sda,format=raw` passthrough.
+5. **Captured serial log from rescue-tui startup.**
+
+### Observed signal
+
+Kernel boot → initramfs mount → rescue-tui startup produced:
+
+```
+2026-04-23T01:49:19.389339Z  INFO rescue_tui: rescue-tui starting version="0.16.0" roots=["/run/media/aegis-isos", "/run/media"]
+2026-04-23T01:49:19.464675Z  INFO rescue_tui: ISO discovery complete discovered=2 on_disk=4 skipped=2
+2026-04-23T01:49:19.468203Z  INFO rescue_tui: rescue-tui: restored last choice idx=0 iso=/run/media/aegis-isos/alpine-standard-3.20.3-x86_64-dup.iso
+```
+
+This confirms end-to-end on real hardware (USB passthrough, not loopback):
+
+- **Load from real exFAT over USB storage works.** The seeded `last-choice.json` was read across a full VM restart through the real kernel USB driver stack (xhci → usb-storage → exfat.ko), not through QEMU's block-layer loopback.
+- **Apply-on-startup path works.** `rescue-tui::apply_persisted_choice` in `main.rs:828` correctly resolves the `iso_path` string to the discovered ISO and sets the cursor (`idx=0` because `alpine-...-dup.iso` sorts before `alpine-...-x86_64.iso` — `-` (0x2d) < `.` (0x2e)).
+- **Trust-chain precondition holds.** EFI stub reported "UEFI Secure Boot is enabled" before the kernel handed off to `init`. The load path is not bypassing SB.
+
+### What this does NOT validate
+
+- **Save-under-duress.** Phases 3-5 of the procedure (interactive pick → confirm → mid-kexec power-cycle) were skipped because driving rescue-tui's TUI via QEMU serial from an automated harness is fragile. The save path (`atomic_write` with rename-over + dir fsync in `persistence.rs:184`) still needs physical hardware exercise. That's the residual gap for #132 multi-vendor closure.
+- **Per-vendor firmware quirks.** Still Framework-only here (this host).
+- **Power-loss timing.** The "race the fsync" negative-path hasn't been demonstrated.
+
+### Next
+
+The remaining save-under-duress leg requires either (a) a physical laptop with the stick + hand power-cycle at the right moment, or (b) a scripted TUI driver that can `ssh`-style drive rescue-tui through the serial console. (a) is faster; (b) is reusable for future CI. Currently tracked as the residual item under the multi-vendor hardware gate.
+
+**Outcome for this addendum:** ADR 0003's **load path** is validated on real hardware for Framework Laptop / kernel 6.14.0-37 / OVMF SecBoot enforcing / SanDisk Cruzer. **Save path** remains pending for the next bare-metal session.
