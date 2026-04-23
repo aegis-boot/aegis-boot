@@ -63,6 +63,7 @@ mod update;
 mod update_apply;
 mod userfacing;
 mod verify;
+mod verify_stick;
 
 use std::env;
 use std::process::ExitCode;

@@ -54,10 +54,15 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
     // detection tolerates the flag appearing anywhere in args; positional
     // args (the mount target) are whatever doesn't start with `--`.
     let json_mode = args.iter().any(|a| a == "--json");
+    let stick_mode = args.iter().any(|a| a == "--stick");
     let target = args
         .iter()
         .find(|a| !a.starts_with("--"))
         .map(String::as_str);
+
+    if stick_mode {
+        return dispatch_stick_mode(target, json_mode);
+    }
 
     let mount = match resolve_mount(target) {
         Ok(m) => m,
@@ -237,6 +242,30 @@ fn convert_verdict(v: &HashVerification) -> aegis_wire_formats::VerifyVerdict {
         }
         HashVerification::NotPresent => aegis_wire_formats::VerifyVerdict::NotPresent,
     }
+}
+
+/// #432: manifest-drift integrity check. Different semantic from
+/// ISO-hash verification — delegates to `verify_stick` which handles
+/// disk GUID → attestation lookup → per-file mtype-hash comparison
+/// against the manifest's `EspFileEntry[]`. Split from `try_run` to
+/// stay under clippy's 100-line-per-function soft cap.
+fn dispatch_stick_mode(target: Option<&str>, json_mode: bool) -> Result<(), u8> {
+    let Some(dev) = target else {
+        let msg = "--stick requires a device path: `aegis-boot verify --stick /dev/sdX`";
+        if json_mode {
+            let envelope = aegis_wire_formats::CliError {
+                schema_version: aegis_wire_formats::CLI_ERROR_SCHEMA_VERSION,
+                error: msg.to_string(),
+            };
+            if let Ok(body) = serde_json::to_string_pretty(&envelope) {
+                println!("{body}");
+            }
+        } else {
+            eprintln!("aegis-boot verify: {msg}");
+        }
+        return Err(2);
+    };
+    crate::verify_stick::run(std::path::Path::new(dev), json_mode)
 }
 
 fn print_help() {
