@@ -4,6 +4,69 @@ All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](
 
 ## [Unreleased]
 
+All changes are post-v0.16.0, landing on main over 2026-04-22. Headline themes: ADR 0003 cross-reboot persistence shipped end-to-end, MSRV bumped to Rust 1.88, first-class NixOS install path via flake, and the entire major-dep-bump backlog from #411 cleared (indicatif, toml, schemars, sha2).
+
+### ⚠️ Breaking change for external schema consumers
+
+`aegis-wire-formats`'s schemars dep bumped 0.8 → 1.2 ([#414](https://github.com/aegis-boot/aegis-boot/pull/414)). The 13 JSON Schema files under `docs/reference/schemas/` now declare `"$schema": "https://json-schema.org/draft/2020-12/schema"` (previously `draft-07`). Draft-07 validators will need to accept both drafts or upgrade. Library consumers using `aegis-wire-formats` without the `schema` feature are unaffected; schemars stays `optional = true`.
+
+### Cross-reboot last-booted persistence — ADR 0003 + #375 all phases
+
+Closed the `/run/aegis-boot` tmpfs scope mismatch caught during #132 validation. `rescue-tui::persistence` now writes a stripped `last-choice.json` to `AEGIS_ISOS/.aegis-state/` using atomic rename-over + directory fsync, so cursor position survives full reboots. Within-session `cmdline_override` (failed-kexec retry) remains tmpfs-only per the two-tier design.
+
+- ADR 0003 [`LAST_BOOTED_PERSISTENCE.md`](./docs/architecture/LAST_BOOTED_PERSISTENCE.md) accepted at 83.3% supermajority.
+- Phase 1 implementation ([#402](https://github.com/aegis-boot/aegis-boot/pull/402)).
+- Phase 2/3 reboot-simulation round-trip test + hardware-procedure doc ([#403](https://github.com/aegis-boot/aegis-boot/pull/403)).
+- `reboot_simulation_round_trip` + `within_session_load_prefers_tmpfs_with_cmdline_override` tests lock the behavior.
+- Hardware leg (physical Framework/Dell/ThinkPad flash → boot → pick → power-cycle → boot → verify cursor) documented in `docs/validation/REAL_HARDWARE_REPORT_132.md`; execution tracked under the multi-vendor gate.
+
+### NixOS install path — first-class flake package (#406)
+
+`flake.nix` now exposes `packages.aegis-bootctl` (via `rustPlatform.buildRustPackage`), `apps.default`, and `nixosModules.aegis-boot`. Runtime deps (sgdisk, mkfs.fat, mkfs.exfat, mcopy, curl, gnupg, coreutils) are baked into `$PATH` via `makeWrapper` so there's nothing extra to install:
+
+```bash
+nix run github:aegis-boot/aegis-boot -- flash /dev/sdX --yes
+nix profile install github:aegis-boot/aegis-boot
+```
+
+Plus a `nixosModules.aegis-boot` for declarative system-flake import. CI's nix-smoke job now also builds the derivation on every PR ([#407](https://github.com/aegis-boot/aegis-boot/pull/407)).
+
+### MSRV bump — Rust 1.85 → 1.88 (#258 cleared)
+
+Driven by `time 0.3.47` in the ratatui 0.30 tree, not a language-feature need. Rust 1.88 is ~10 months old; the bump is accepting an upstream-forced move. Touches 21 files (workspace Cargo.toml, 11 CI workflows, Dockerfile.locked, BUILDING.md, README.md, ARCHITECTURE.md, INSTALL.md, flake.nix channel pin nixos-25.05 → nixos-25.11, scripts/check-doc-version.sh, iso-parser/fuzz/Cargo.toml). Closes the low-severity lru `IterMut` dependabot advisory ([#408](https://github.com/aegis-boot/aegis-boot/pull/408)).
+
+### ratatui 0.29 → 0.30 (#258)
+
+Backend trait `<B as Backend>::Error` lost its default `'static` bound. Added `where <B as Backend>::Error: 'static` to `rescue-tui::event_loop` — the only generic Backend call site. No visual behavior change.
+
+### Major-version dep bump backlog cleared — #411 all 4 items
+
+- **`indicatif` 0.17 → 0.18** ([#412](https://github.com/aegis-boot/aegis-boot/pull/412)) — progress bar on `aegis-boot flash`, API stable for our usage.
+- **`toml` 0.8 → 1.1** ([#413](https://github.com/aegis-boot/aegis-boot/pull/413)) — parser/writer/datetime crate split; iso-probe sidecar API unaffected.
+- **`schemars` 0.8 → 1.2** ([#414](https://github.com/aegis-boot/aegis-boot/pull/414)) — see breaking note above.
+- **`sha2` 0.10 → 0.11** ([#415](https://github.com/aegis-boot/aegis-boot/pull/415)) — trait package restructure (crypto-common 0.1 → 0.2, digest 0.10 → 0.11); `Digest::new/update/finalize` identical. SHA-256 is byte-stable by algorithm spec, so on-disk hashes are unaffected.
+
+### Dep refresh (compat-level)
+
+- `tokio` 1.51 → 1.52 (dev-dep, iso-parser).
+- `crossterm` 0.28 → 0.29 on rescue-tui's direct pin — ratatui 0.30 already pulls 0.29 transitively, de-duplicates.
+- `python311` → `python312` in flake devShell (nixos-25.11 alignment).
+
+### Tooling + CI
+
+- **SAST sweep cleared 18 `unsafe-usage` findings** ([#405](https://github.com/aegis-boot/aegis-boot/pull/405)) — edition-2024 `std::env::set_var` in `ENV_MUTEX`-guarded `#[cfg(test)]` blocks, now documented with SAFETY + `nosemgrep` annotations.
+- **Rust stable `collapsible_if` lint fix** — 3 sites in `iso-parser/src/lib.rs` using let-chains (stable since 1.88).
+- **Actions hygiene:** `cachix/install-nix-action` v27 → v31; `sign-identity-transition.yml` checkout@v4 → v5 for consistency.
+- **Node 20 deprecation** tracked in [#409](https://github.com/aegis-boot/aegis-boot/issues/409) — GitHub auto-forces Node 24 on 2026-06-02. No action needed until then; plan to opt-in test early May 2026 via `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`.
+
+### Close-outs
+
+- Epic **#51** (crates.io publishing) closed — 6 crates live (`iso-parser`, `iso-probe`, `kexec-loader`, `aegis-wire-formats`, `aegis-fitness`, `aegis-bootctl`) at v0.16.0 via Trusted Publishing (OIDC, no long-lived tokens).
+- Successor **#375** closed — all software-side acceptance met; hardware leg rolls up into multi-vendor gate.
+- Tech-debt **#258** closed via #408.
+- Tech-debt **#404** (SAST semgrep) closed via #405.
+- Tech-debt **#411** closed via #412/#413/#414/#415.
+
 ## [0.16.0] — 2026-04-22
 
 First release under the dedicated **`aegis-boot` GitHub org**. Direct-install pipeline shipped end-to-end with signed attestation manifests, operator UX gained three one-command workflows (`quickstart`, `init`, catalog-slug `add`), and the supply chain grew a second signed trust anchor (minisign, ADR 0002 ACCEPTED) to sit alongside the cosign-keyless release signing. macOS arm64 release binaries ship per-tag via a new Homebrew bottle and a `release.yml` that builds the darwin target natively. The org move closes the `aegis-boot/aegis-*` naming story, pre-registers all library crates on crates.io with team-based ownership, and replaces the long-lived `CARGO_REGISTRY_TOKEN` with Trusted Publishing (short-lived OIDC tokens per-release).
