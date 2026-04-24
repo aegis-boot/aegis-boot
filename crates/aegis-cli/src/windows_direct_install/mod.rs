@@ -16,6 +16,7 @@
 //! reviewable from Linux.
 
 pub(crate) mod drive_enumeration;
+pub(crate) mod flash_dispatcher;
 pub(crate) mod format;
 pub(crate) mod partition;
 pub(crate) mod pipeline;

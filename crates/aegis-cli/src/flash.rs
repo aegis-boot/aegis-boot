@@ -143,15 +143,15 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
         );
         return Err(2);
     }
-    // --direct-install is Linux-only — partition/format/stage helpers
-    // shell out to sgdisk + mkfs.fat + mkfs.exfat + mtools, all
-    // Linux-resident. Macros gate the module itself with
-    // #![cfg(target_os = "linux")] so any non-Linux build wouldn't even
-    // link the dispatcher. Refuse early with a clear message.
-    #[cfg(not(target_os = "linux"))]
+    // --direct-install: Linux shells out to sgdisk + mkfs.fat +
+    // mkfs.exfat + mtools; Windows (#497) composes diskpart + Format-
+    // Volume + windows-rs raw-write in crate::windows_direct_install.
+    // macOS remains unsupported (tracked as #418 — macOS adapter).
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     if direct_install {
         eprintln!(
-            "aegis-boot flash: --direct-install is Linux-only (sgdisk + mkfs.fat + mkfs.exfat + mtools)"
+            "aegis-boot flash: --direct-install is only supported on Linux + Windows. \
+             macOS support tracked in #418."
         );
         return Err(2);
     }
@@ -165,6 +165,23 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
             );
             return Err(1);
         }
+    }
+
+    // Windows --direct-install path: skips the Linux drive-selection
+    // + confirm-prompt code (both are /proc/partitions-shaped) and
+    // hands off to the Windows-native dispatcher which composes
+    // drive_enumeration + source_resolution + pipeline::run.
+    #[cfg(target_os = "windows")]
+    if direct_install {
+        if dry_run {
+            eprintln!(
+                "aegis-boot flash --direct-install on Windows: --dry-run \
+                 is not yet supported (no typed Plan shape for Windows)."
+            );
+            return Err(2);
+        }
+        let resolved_out_dir = out_dir.unwrap_or_else(|| PathBuf::from("./out"));
+        return run_windows_direct_install(explicit_dev, &resolved_out_dir, assume_yes);
     }
 
     // Step 1: select drive.
@@ -235,6 +252,67 @@ fn print_dry_run_plan(plan: &crate::plan::Plan) {
     println!("--dry-run: no changes were made. Re-run without --dry-run to execute.");
 }
 
+/// Windows `--direct-install` entry — thin wrapper around the
+/// Windows dispatcher that prints a confirm prompt (unless
+/// `--yes`), runs the pipeline, and translates the dispatcher's
+/// typed error into the right exit code.
+#[cfg(target_os = "windows")]
+fn run_windows_direct_install(
+    explicit_dev: Option<&str>,
+    out_dir: &Path,
+    assume_yes: bool,
+) -> Result<(), u8> {
+    use crate::windows_direct_install::flash_dispatcher::run_direct_install;
+
+    // Pre-confirm prompt — skip if --yes. We don't replicate the
+    // `select_drive` prompt because the dispatcher itself surfaces
+    // the candidate list when no explicit drive is given. This
+    // confirmation covers the case where the operator DID pass a
+    // drive; we want a last-chance "yes, destroy this disk" gate
+    // before we spawn diskpart.
+    if !assume_yes {
+        let Some(raw) = explicit_dev else {
+            // No drive given + no --yes — dispatcher will print the
+            // candidate list and bail with exit 2 below. Let it.
+            return finalize_windows_dispatch(run_direct_install(None, out_dir));
+        };
+        eprintln!(
+            "Windows --direct-install will destroy ALL partitions on {raw}. \
+             Re-run with --yes to confirm."
+        );
+        return Err(2);
+    }
+
+    finalize_windows_dispatch(run_direct_install(explicit_dev, out_dir))
+}
+
+#[cfg(target_os = "windows")]
+fn finalize_windows_dispatch(
+    result: Result<
+        crate::windows_direct_install::pipeline::DirectInstallReceipt,
+        crate::windows_direct_install::flash_dispatcher::DispatchError,
+    >,
+) -> Result<(), u8> {
+    use crate::windows_direct_install::flash_dispatcher::{DispatchError, format_receipt};
+    match result {
+        Ok(receipt) => {
+            println!("\nDirect-install complete.");
+            print!("{}", format_receipt(&receipt));
+            Ok(())
+        }
+        Err(err @ DispatchError::NeedsExplicitDrive(_)) => {
+            // Print the candidate list + remediation to stderr so
+            // operators see it even when stdout is redirected.
+            eprintln!("{err}");
+            Err(2)
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            Err(1)
+        }
+    }
+}
+
 fn print_post_flash_next_steps(drive: &Drive) {
     println!();
     println!("Done. Next steps:");
@@ -284,11 +362,20 @@ fn print_help() {
     println!("                     device as its ISO partition (#242). Rare — use when you");
     println!("                     deliberately want the small mkusb-default partition size.");
     println!("  --direct-install = bypass mkusb.sh + dd. Partition + format + stage the signed");
-    println!("                     boot chain in place via sgdisk + mkfs.{{fat,exfat}} + mtools.");
-    println!("                     ~30 sec vs ~4 min on USB 2.0. Linux only. (#274 Phase 3)");
-    println!("                     Mutually exclusive with --image.");
-    println!("  --out-dir PATH   = directory holding the aegis-boot initramfs.cpio.gz for");
-    println!("                     --direct-install. Default: ./out (mkusb.sh convention).");
+    println!(
+        "                     boot chain in place. Linux: sgdisk + mkfs.{{fat,exfat}} + mtools."
+    );
+    println!(
+        "                     Windows: diskpart + Format-Volume + windows-rs raw-write (#497)."
+    );
+    println!("                     ~30 sec vs ~4 min on USB 2.0. Mutually exclusive with --image.");
+    println!("  --out-dir PATH   = directory holding the signed-chain files for --direct-install.");
+    println!(
+        "                     Default: ./out (mkusb.sh convention). Windows operators can also"
+    );
+    println!(
+        "                     override individual files via AEGIS_{{SHIM,GRUB,MM,KERNEL,INITRD}}_SRC."
+    );
 }
 
 /// Build the typed `Plan` describing what `aegis-boot flash` would do
