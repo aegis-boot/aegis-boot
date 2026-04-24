@@ -199,29 +199,33 @@ The first consensus vote surfaced a second gap: **temporal deadlock**. A field r
 
 **Rev 2 addition: the trust anchor is a LIST, not a single pubkey.**
 
-`crates/aegis-cli/src/trust_anchor.rs` exposes:
+The `aegis-trust` crate (landed in #421 PR A) exposes the list via the [`EpochEntry`] record type plus the [`TrustAnchor::epochs()`] accessor. Entries are sourced from `keys/historical-anchors.json` (runtime decode) and `keys/maintainer-epoch-<N>.pub` (build-time `include_str!`):
 
 ```rust
-/// All trust anchors this binary recognizes, newest first.
-/// The HEAD of the list is the active key (used for new signatures + epoch checks).
-/// The TAIL is historical keys, kept around for verifying pre-rotation artifacts.
-pub const AEGIS_BOOT_TRUST_ANCHORS: &[TrustAnchor] = &[
-    TrustAnchor {
-        epoch: 2,
-        pubkey: include_bytes!("../../../keys/aegis-boot-trust-anchor-ep2.pub"),
-        valid_from: "2027-03-15",
-        reason: "scheduled rotation per §5.1 rehearsal cadence",
-    },
-    TrustAnchor {
-        epoch: 1,
-        pubkey: include_bytes!("../../../keys/aegis-boot-trust-anchor-ep1.pub"),
-        valid_from: "2026-04-21",
-        reason: "initial keypair",
-    },
-];
+// crates/aegis-trust/src/anchor.rs
+#[derive(Debug, Clone, Deserialize)]
+pub struct EpochEntry {
+    pub epoch: u32,                   // monotonic u32; epoch 1 is initial
+    pub pubkey_file: String,          // "keys/maintainer-epoch-<N>.pub"
+    pub pubkey_fingerprint: String,   // base64 identifier line
+    pub valid_from: String,           // RFC3339
+    pub expires_at: Option<String>,   // RFC3339 or null = "until superseded"
+    pub note: String,
+}
 ```
 
+The current state of the list — canonical source of truth, not a hand-written snapshot — is the table below (regenerated from `keys/historical-anchors.json` + `keys/canonical-epoch.json` by `trust-anchors-docgen`; CI fails the PR on drift):
+
+<!-- trust-anchors:BEGIN:EPOCH_TABLE -->
+| Epoch | Valid from | Expires at | Pubkey fingerprint | Source file | Note |
+| ----- | ---------- | ---------- | ------------------ | ----------- | ---- |
+| 1 (active) | 2026-04-24 | (none) | `RWSl…pF/I` | `keys/maintainer-epoch-1.pub` | Initial maintainer-held key, solo-maintainer epoch. No scheduled rotation; rotate only on compromise per ADR 0002 §3.4. |
+<!-- trust-anchors:END:EPOCH_TABLE -->
+
 On verify, the binary walks the list and accepts the first pubkey for which the signature validates. The Epoch counter (§3.5) prevents rollback of an attacker-controlled old key from tricking operators — a pre-rotation manifest is accepted ONLY if its declared epoch equals the epoch of the pubkey that verified it, AND that epoch is not lower than `seen-epoch` for manifests claiming to be current.
+
+[`EpochEntry`]: https://github.com/aegis-boot/aegis-boot/blob/main/crates/aegis-trust/src/anchor.rs
+[`TrustAnchor::epochs()`]: https://github.com/aegis-boot/aegis-boot/blob/main/crates/aegis-trust/src/anchor.rs
 
 Historical-anchor entries are append-only. Rotations ADD to the list; the active key moves to HEAD. Old operators with an older binary can only verify up to the newest anchor their binary carries, which is the expected behavior (they need to upgrade to verify anything newer than their binary's release). New operators with a new binary can verify everything back to epoch 1. Field-forensics at year-10 works as long as someone kept a binary shipped after the manifest was written.
 

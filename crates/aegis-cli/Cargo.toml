@@ -48,6 +48,17 @@ name = "cli-docgen"
 path = "src/bin/cli_docgen.rs"
 required-features = ["docgen"]
 
+# Trust-anchor doc-drift tool (#421 follow-up). Renders
+# `keys/historical-anchors.json` + `keys/canonical-epoch.json` into
+# a programmatic epoch-history table in
+# `docs/architecture/KEY_MANAGEMENT.md`. Feature-gated to keep
+# serde_json + this tool out of the release binary; CI runs
+# `--check` to enforce drift-freedom.
+[[bin]]
+name = "trust-anchors-docgen"
+path = "src/bin/trust_anchors_docgen.rs"
+required-features = ["docgen"]
+
 [features]
 # Gates doc-generator bins so the normal release `aegis-boot`
 # binary does not compile the generator code paths. Pure stdlib —
