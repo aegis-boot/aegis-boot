@@ -1379,13 +1379,11 @@ mod tests {
     #[test]
     fn check_command_present_with_pkg_finds_existing_binary() {
         // Known-good probe per platform — `ls` is universal on
-        // POSIX; `cmd.exe` is present on every Windows install. The
-        // `.exe` suffix is required because `crate::cmd_path::which`
-        // does not currently auto-append `PATHEXT` extensions on
-        // Windows (tracked as a separate improvement — the doctor
-        // surface for Windows operators is still a gap).
+        // POSIX; `cmd` (stem only — `cmd_path::which` resolves the
+        // `.exe` via PATHEXT since #504) is present on every
+        // Windows install.
         let probe = if cfg!(target_os = "windows") {
-            "cmd.exe"
+            "cmd"
         } else {
             "ls"
         };
