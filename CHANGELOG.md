@@ -4,6 +4,15 @@ All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](
 
 ## [Unreleased]
 
+### Windows `PATHEXT` support in `cmd_path::which` (#504)
+
+`crate::cmd_path::which` now auto-appends `PATHEXT` extensions on Windows so operators can type `aegis-boot doctor` and see `cosign` / `curl` / `diskpart` resolve without having to spell out `.exe`. On POSIX the stem is used verbatim (no extension auto-append) — preserving existing Linux behavior.
+
+- Matching order: stem as given → each `PATHEXT` extension in order.
+- PATHEXT fallback defaults to `.COM;.EXE;.BAT;.CMD;.VBS;.JS;.WS;.PS1` when the env var is unset (matches `cmd.exe`'s own default).
+- Empty entries in PATHEXT tolerated (`.COM;;.EXE` works).
+- 7 new unit tests cover the matching logic; 1 Windows-only integration test verifies `which("cmd")` resolves end-to-end on the real windows-2022 runner.
+
 ### Cross-platform test fixes + Windows cache-dir fallback (#502)
 
 Three tests were previously Linux-biased; #502 makes them run cleanly on Windows and broadens the #501 full-suite gate to all 593 aegis-bootctl tests:
