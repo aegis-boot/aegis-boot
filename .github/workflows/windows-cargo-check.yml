@@ -107,10 +107,10 @@ jobs:
 
       - name: cargo clippy (Windows-native lint)
         # Some clippy lints (struct_excessive_bools, borrow_as_ptr
-        # around Win32 types) only fire on the Windows build target;
-        # linting natively here catches them before a backdoor path.
-        # Allowed to fail for now — many pre-existing findings on the
-        # cfg(target_os = "windows") code paths that were never
-        # Windows-linted. Promote to strict once the backlog clears.
-        continue-on-error: true
+        # around Win32 types, cast_ptr_alignment on repr(align())
+        # reinterpret casts) only fire on the Windows build target;
+        # linting natively here catches them before any backdoor
+        # Windows-gated code path sneaks through. STRICT as of the
+        # follow-up to #501 that cleared the 27-finding backlog —
+        # any new Windows-gated clippy finding fails CI.
         run: cargo clippy -p aegis-bootctl --all-targets --locked -- -D warnings

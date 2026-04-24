@@ -418,7 +418,7 @@ mod sys {
     //!
     //! RAII wrappers close handles + free aligned buffers on drop so
     //! early returns on write-loop errors don't leak a locked volume
-    //! or a 4 MiB VirtualAlloc region.
+    //! or a 4 MiB `VirtualAlloc` region.
 
     use std::alloc::{Layout, alloc_zeroed, dealloc};
     use std::ffi::c_void;
@@ -600,7 +600,7 @@ mod sys {
                 0,
                 Some(out.as_mut_ptr().cast()),
                 out_size,
-                Some(&mut bytes_returned),
+                Some(&raw mut bytes_returned),
                 None,
             )
         };
@@ -616,8 +616,8 @@ mod sys {
     }
 
     /// `FSCTL_LOCK_VOLUME` — exclusive access before write. Fails
-    /// cleanly on BitLocker-protected volumes (ACCESS_DENIED) or on
-    /// Defender-scan contention (SHARING_VIOLATION).
+    /// cleanly on `BitLocker`-protected volumes (`ACCESS_DENIED`) or
+    /// on Defender-scan contention (`SHARING_VIOLATION`).
     pub(super) fn lock_volume(handle: &OwnedHandle) -> Result<(), String> {
         let mut bytes_returned: u32 = 0;
         // Safety: FSCTL_LOCK_VOLUME takes no input/output buffers.
@@ -631,7 +631,7 @@ mod sys {
                 0,
                 None,
                 0,
-                Some(&mut bytes_returned),
+                Some(&raw mut bytes_returned),
                 None,
             )
         };
@@ -653,7 +653,7 @@ mod sys {
                 0,
                 None,
                 0,
-                Some(&mut bytes_returned),
+                Some(&raw mut bytes_returned),
                 None,
             )
         };
@@ -702,7 +702,9 @@ mod sys {
                 match src.read(&mut slice[filled..]) {
                     Ok(0) => break,
                     Ok(n) => filled += n,
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    // EINTR — retry the read. The loop condition
+                    // re-checks `filled` so we don't need `continue`.
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                     Err(e) => return Err(format!("write_all: source read: {e}")),
                 }
             }
@@ -744,7 +746,7 @@ mod sys {
                         buf.as_ptr().cast::<u8>(),
                         write_len,
                     )),
-                    Some(&mut bytes_written),
+                    Some(&raw mut bytes_written),
                     None,
                 )
             };
@@ -770,17 +772,11 @@ mod sys {
     /// of `physical_drive`. Used by [`super::stage_esp`] to drop files
     /// through the FS driver without needing a drive letter.
     pub(super) fn find_esp_volume_guid(physical_drive: u32) -> Result<String, String> {
-        let mut name_buf = [0u16; 256];
-        // Safety: name_buf is a valid u16 slice for FindFirstVolumeW
-        // to fill. Length passed matches slice size.
-        #[allow(unsafe_code)]
-        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-        let find = unsafe { FindFirstVolumeW(&mut name_buf) }
-            .map_err(|_| last_error_message("FindFirstVolumeW"))?;
-
         // RAII cleanup: always close the find handle. windows-rs 0.58
         // exposes Find*VolumeW as HANDLE-based APIs; the distinct
         // FindVolumeHandle newtype doesn't exist in this version.
+        // Defined up-front (not mid-body) so clippy's
+        // items-after-statements pedantic lint stays happy.
         struct FindGuard(HANDLE);
         impl Drop for FindGuard {
             fn drop(&mut self) {
@@ -789,6 +785,15 @@ mod sys {
                 let _ = unsafe { FindVolumeClose(self.0) };
             }
         }
+
+        let mut name_buf = [0u16; 256];
+        // Safety: name_buf is a valid u16 slice for FindFirstVolumeW
+        // to fill. Length passed matches slice size.
+        #[allow(unsafe_code)]
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+        let find = unsafe { FindFirstVolumeW(&mut name_buf) }
+            .map_err(|_| last_error_message("FindFirstVolumeW"))?;
+
         let _guard = FindGuard(find);
 
         loop {
@@ -823,6 +828,17 @@ mod sys {
     /// read-only, queries `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`, and
     /// returns true if any extent lives on the target disk.
     fn volume_backs_physical_drive(vol_name: &str, physical_drive: u32) -> Result<bool, String> {
+        // VOLUME_DISK_EXTENTS is variable-length (DISK_EXTENT[]);
+        // 256 bytes is enough for 8 extents which covers every
+        // USB-stick + typical multi-LUN layout. Wrapped in
+        // `#[repr(C, align(8))]` so the pointer-alignment contract
+        // with the 8-byte-aligned VOLUME_DISK_EXTENTS struct is
+        // satisfied (a bare `[u8; 256]` is only 1-byte-aligned,
+        // which is UB for the `&*(ptr as *const STRUCT)` reinterpret
+        // below).
+        #[repr(C, align(8))]
+        struct AlignedExtentBuf([u8; 256]);
+
         // Trim the trailing `\` — CreateFileW accepts the volume name
         // with or without, but the raw-volume handle needs it without.
         let trimmed = vol_name.trim_end_matches('\\');
@@ -848,14 +864,10 @@ mod sys {
 
         let owned = OwnedHandle(handle);
 
-        // VOLUME_DISK_EXTENTS is variable-length (DISK_EXTENT[]); a
-        // buffer large enough for 8 extents suffices for USB sticks
-        // (usually 1, occasionally 2-4 for striped layouts).
-        const EXTENT_BUF_SIZE: usize = 256;
-        let mut ext_buf = [0u8; EXTENT_BUF_SIZE];
+        let mut ext_buf = AlignedExtentBuf([0u8; 256]);
         let mut bytes_returned: u32 = 0;
 
-        // Safety: ext_buf points to EXTENT_BUF_SIZE valid bytes;
+        // Safety: ext_buf points to 256 valid bytes 8-byte aligned;
         // handle is a valid volume handle.
         #[allow(unsafe_code)]
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -865,9 +877,9 @@ mod sys {
                 IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
                 None,
                 0,
-                Some(ext_buf.as_mut_ptr().cast()),
-                u32::try_from(EXTENT_BUF_SIZE).unwrap_or(u32::MAX),
-                Some(&mut bytes_returned),
+                Some(ext_buf.0.as_mut_ptr().cast()),
+                u32::try_from(ext_buf.0.len()).unwrap_or(u32::MAX),
+                Some(&raw mut bytes_returned),
                 None,
             )
         };
@@ -875,13 +887,20 @@ mod sys {
 
         // Safety: DeviceIoControl filled ext_buf with a
         // VOLUME_DISK_EXTENTS header + DISK_EXTENT[] tail. Reading the
-        // header is sound once bytes_returned covers its size.
+        // header is sound once bytes_returned covers its size, and
+        // AlignedExtentBuf guarantees 8-byte alignment matches the
+        // VOLUME_DISK_EXTENTS struct alignment.
         if (bytes_returned as usize) < std::mem::size_of::<VOLUME_DISK_EXTENTS>() {
             return Ok(false);
         }
-        #[allow(unsafe_code)]
+        // Safety: AlignedExtentBuf is repr(C, align(8)); its inner
+        // [u8; 256] occupies the same 8-byte-aligned region as the
+        // struct itself. Clippy sees only the [u8;256]-as-ptr cast
+        // shape and flags 1→8 alignment increase — suppressed with
+        // a documented reason.
+        #[allow(unsafe_code, clippy::cast_ptr_alignment)]
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-        let header = unsafe { &*(ext_buf.as_ptr() as *const VOLUME_DISK_EXTENTS) };
+        let header = unsafe { &*(ext_buf.0.as_ptr().cast::<VOLUME_DISK_EXTENTS>()) };
         let n = header.NumberOfDiskExtents as usize;
         // Extents live after the first u32 + 4-byte pad; windows-rs
         // DISK_EXTENT[1] is a tail array.
@@ -1127,23 +1146,21 @@ mod tests {
     fn raw_write_roundtrip_on_scratch_disk() {
         use std::io::Write as _;
 
-        let drive: u32 = match std::env::var("AEGIS_BOOT_RAW_WRITE_TEST_DRIVE") {
-            Ok(s) => s
-                .parse()
-                .expect("AEGIS_BOOT_RAW_WRITE_TEST_DRIVE must be u32"),
-            Err(_) => {
-                eprintln!("AEGIS_BOOT_RAW_WRITE_TEST_DRIVE unset; skipping");
-                return;
-            }
+        let Ok(drive_str) = std::env::var("AEGIS_BOOT_RAW_WRITE_TEST_DRIVE") else {
+            eprintln!("AEGIS_BOOT_RAW_WRITE_TEST_DRIVE unset; skipping");
+            return;
         };
+        let drive: u32 = drive_str
+            .parse()
+            .expect("AEGIS_BOOT_RAW_WRITE_TEST_DRIVE must be u32");
         assert_ne!(drive, 0, "disk 0 is the OS boot drive — refuse");
 
         // Build a deterministic payload the readback can verify.
         // 3 × 4 KiB = 12 KiB (covers the "final chunk padding" path
         // without taking seconds of I/O).
-        let mut payload = Vec::with_capacity(3 * 4096);
-        for i in 0..(3 * 4096) {
-            payload.push(((i * 131) & 0xff) as u8);
+        let mut payload: Vec<u8> = Vec::with_capacity(3 * 4096);
+        for i in 0..(3 * 4096u32) {
+            payload.push(((i.wrapping_mul(131)) & 0xff) as u8);
         }
         let mut src = tempfile::NamedTempFile::new().expect("temp");
         src.write_all(&payload).expect("write temp");
@@ -1206,7 +1223,7 @@ mod tests {
         // to cover both 512e and 4Kn. The test payload is already 12 KiB
         // (3 × 4 KiB).
         let sector_bytes: usize = 4096;
-        let read_size = ((len + sector_bytes - 1) / sector_bytes) * sector_bytes;
+        let read_size = len.div_ceil(sector_bytes) * sector_bytes;
 
         // Need an aligned buffer for direct I/O.
         let layout = std::alloc::Layout::from_size_align(read_size, 4096)
@@ -1256,7 +1273,7 @@ mod tests {
         // Safety: buf points to read_size bytes; h is a valid read handle.
         #[allow(unsafe_code)]
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-        let rc = unsafe { ReadFile(h, Some(buf), Some(&mut bytes_read), None) };
+        let rc = unsafe { ReadFile(h, Some(buf), Some(&raw mut bytes_read), None) };
 
         let out = buf[..len].to_vec();
 

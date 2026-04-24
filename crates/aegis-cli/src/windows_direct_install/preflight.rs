@@ -183,7 +183,7 @@ pub(crate) fn defender_exclusion_hint(physical_drive: u32) -> String {
     )
 }
 
-/// Run the elevation check via PowerShell. Returns `Ok(true)` if
+/// Run the elevation check via `PowerShell`. Returns `Ok(true)` if
 /// elevated, `Ok(false)` if not, `Err` on subprocess failure.
 #[cfg(target_os = "windows")]
 pub(crate) fn is_running_as_admin() -> Result<bool, String> {
@@ -204,7 +204,7 @@ pub(crate) fn is_running_as_admin() -> Result<bool, String> {
     Ok(parse_is_admin_output(&stdout))
 }
 
-/// Run the BitLocker status check via PowerShell → `manage-bde`.
+/// Run the `BitLocker` status check via `PowerShell` → `manage-bde`.
 #[cfg(target_os = "windows")]
 pub(crate) fn check_bitlocker_status(physical_drive: u32) -> Result<BitLockerStatus, String> {
     use std::process::Command;

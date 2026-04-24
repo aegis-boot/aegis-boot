@@ -140,7 +140,7 @@ pub(crate) trait PhaseRunner {
 }
 
 /// Production phase runner — dispatches each method to the module
-/// that owns the real Win32 / PowerShell subprocess work. Compiles
+/// that owns the real Win32 / `PowerShell` subprocess work. Compiles
 /// only on Windows; other hosts route through a mock (tests) or
 /// refuse to build the CLI dispatcher (see `flash.rs` gating).
 #[cfg(target_os = "windows")]

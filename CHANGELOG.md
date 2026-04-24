@@ -4,6 +4,14 @@ All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](
 
 ## [Unreleased]
 
+### Windows-native clippy promoted to strict (follow-up to #501)
+
+Cleared the 27 pre-existing `cfg(target_os = "windows")` clippy findings in the `windows_direct_install::*` code paths, then removed the `continue-on-error` flag on the `windows-cargo-check.yml` clippy step. Any new Windows-gated clippy finding now fails CI. Notable semantic fixes along the way:
+
+- `VOLUME_DISK_EXTENTS` readback buffer wrapped in a `#[repr(C, align(8))]` struct. The previous `[u8; 256]` was 1-byte-aligned while the struct needed 8-byte alignment — technically Undefined Behavior on the `&*(ptr as *const STRUCT)` reinterpret, practically fine on x86-64 but the alignment contract is now explicit.
+- 6 `DeviceIoControl` / `WriteFile` / `ReadFile` calls changed from `Some(&mut var)` to `Some(&raw mut var)` — addresses the `implicit_borrow_as_ptr` lint by using the explicit raw-pointer syntax (Rust 2024 / ≥ 1.82).
+- `&mut [u8; 256]` → aligned wrapper struct for `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` buffer — eliminated the 1→8-byte alignment reinterpret that clippy (correctly) flagged.
+
 ### Pin all GitHub Actions refs to SHAs (Scorecard `Pinned-Dependencies`)
 
 76 action-ref pins across 24 workflows. Every `uses:` reference is now `repo@<40-char-sha>  # <tag>` form — a transactional constant that supply-chain attackers can't retroactively retarget via tag-move. Closes the 72 `Pinned-Dependencies` + 24 `actions/unpinned-tag` Scorecard / CodeQL findings raised by #490 + #488. Dependabot's `github-actions` package-ecosystem config (from #490) already auto-bumps both the SHA + the trailing comment on new releases, so this is zero operational overhead.
