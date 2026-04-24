@@ -336,37 +336,37 @@ mod tests {
 
     #[test]
     fn build_copy_plan_produces_six_copies() {
-        let plan = build_copy_plan(&sample_sources(), Path::new("/Volumes/AEGIS_ESP"))
-            .expect("valid mount accepts");
+        let mount = PathBuf::from("/Volumes/AEGIS_ESP");
+        let plan = build_copy_plan(&sample_sources(), &mount).expect("valid mount accepts");
         assert_eq!(plan.copies.len(), 6);
-        // Directory list just holds `/Volumes/AEGIS_ESP/EFI/BOOT` —
-        // every .efi file lands inside it, no other dirs needed.
-        assert_eq!(
-            plan.directories,
-            vec![PathBuf::from("/Volumes/AEGIS_ESP/EFI/BOOT")]
-        );
+        // Directory list just holds `<mount>/EFI/BOOT`. Build the
+        // expected PathBuf via the same `join` chain the code uses
+        // so the test is separator-agnostic (the full-workspace
+        // test suite runs on Linux + Windows + macOS even though the
+        // module itself is macOS-only at runtime).
+        assert_eq!(plan.directories, vec![mount.join("EFI").join("BOOT")]);
     }
 
     #[test]
     fn build_copy_plan_destinations_match_esp_layout() {
-        let plan = build_copy_plan(&sample_sources(), Path::new("/Volumes/AEGIS_ESP")).unwrap();
-        let mut destinations: Vec<&str> = plan
-            .copies
-            .iter()
-            .map(|op| op.dest.to_str().unwrap())
-            .collect();
-        destinations.sort_unstable();
-        assert_eq!(
-            destinations,
-            vec![
-                "/Volumes/AEGIS_ESP/EFI/BOOT/BOOTX64.EFI",
-                "/Volumes/AEGIS_ESP/EFI/BOOT/grub.cfg",
-                "/Volumes/AEGIS_ESP/EFI/BOOT/grubx64.efi",
-                "/Volumes/AEGIS_ESP/EFI/BOOT/mmx64.efi",
-                "/Volumes/AEGIS_ESP/initramfs.cpio.gz",
-                "/Volumes/AEGIS_ESP/vmlinuz",
-            ]
-        );
+        // Build the expected set via the same `PathBuf::join` chain
+        // the implementation uses — `Path::join` appends with the
+        // platform separator, so comparing assembled PathBufs works
+        // on both Linux-style `/` and Windows-style `\` hosts (this
+        // whole module is cfg-gated off at runtime on Windows; the
+        // tests still run there during the full-workspace suite).
+        let mount = PathBuf::from("/Volumes/AEGIS_ESP");
+        let expected: Vec<PathBuf> = vec![
+            mount.join("EFI").join("BOOT").join("BOOTX64.EFI"),
+            mount.join("EFI").join("BOOT").join("grubx64.efi"),
+            mount.join("EFI").join("BOOT").join("mmx64.efi"),
+            mount.join("EFI").join("BOOT").join("grub.cfg"),
+            mount.join("vmlinuz"),
+            mount.join("initramfs.cpio.gz"),
+        ];
+        let plan = build_copy_plan(&sample_sources(), &mount).unwrap();
+        let actual: Vec<PathBuf> = plan.copies.iter().map(|op| op.dest.clone()).collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]
