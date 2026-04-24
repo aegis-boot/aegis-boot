@@ -10,11 +10,19 @@ on:
         description: "Tag to build (e.g. v0.12.0)"
         required: true
 
+# Workflow-level permissions follow the OSSF Scorecard
+# "Token-Permissions" principle of least privilege: read-only by
+# default. Every job that needs to mutate the repo (release asset
+# upload, Formula commit) has to opt in explicitly with its own
+# `permissions:` block — that way a future job added in this
+# workflow won't silently inherit write access it doesn't need.
 permissions:
-  contents: write
+  contents: read
   # Required for cosign keyless signing via GitHub OIDC. The token is
   # used by sigstore/cosign-installer + cosign sign-blob to fetch a
-  # signing certificate bound to this workflow's identity.
+  # signing certificate bound to this workflow's identity. Every build
+  # job that cosign-signs artifacts needs this — cheaper to grant at
+  # the workflow level than to duplicate it into three jobs.
   id-token: write
 
 jobs:
@@ -26,6 +34,13 @@ jobs:
     # + exfat data partition. 30 min gives headroom on slower-than-
     # average GHA runners without masking a genuine hang.
     timeout-minutes: 30
+    # contents:write is required for `gh release create` +
+    # `gh release upload` below. Explicit at the job level so the
+    # workflow-top stays read-only per the Scorecard principle of
+    # least privilege; id-token:write is inherited from the workflow.
+    permissions:
+      contents: write
+      id-token: write
 
     steps:
       - name: Checkout
