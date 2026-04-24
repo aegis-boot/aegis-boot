@@ -280,6 +280,7 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
     check_os(&mut report);
     check_machine_identity(&mut report);
     check_host_commands(&mut report);
+    check_trust_anchor(&mut report);
     check_cosign_optional(&mut report);
     check_secureboot_state(&mut report);
     check_removable_drives(&mut report);
@@ -570,6 +571,105 @@ pub(crate) fn dmi_bios_label() -> Option<String> {
 /// it's missing (surfaces a warning, skips the signature layer). So
 /// this check emits `Pass` when present and `Warn` when absent, rather
 /// than `Fail` — operators who never use `fetch-image` don't need it.
+/// ADR 0002 trust-anchor surface (#421). Emits three rows:
+///
+/// 1. `trust: binary epoch floor` — the compile-time
+///    `MIN_REQUIRED_EPOCH` value baked in from
+///    `keys/canonical-epoch.json` at build time, plus the count of
+///    registered epochs from `historical-anchors.json`. Pass if the
+///    anchor loads cleanly; Fail (with remediation) if the binary
+///    was built out-of-workspace and ended up with the unsafe-default
+///    `MIN_REQUIRED_EPOCH=0` sentinel.
+/// 2. `trust: seen-epoch` — the monotonic local counter at
+///    `$XDG_STATE_HOME/aegis-boot/trust/seen-epoch`. Pass if the
+///    file is absent (first-run — reports `0`) or reads cleanly;
+///    Fail if the file exists but can't be parsed (corruption is a
+///    signal worth flagging, not smoothing over).
+/// 3. `trust: drift` — compares the binary floor against the local
+///    seen-epoch. Pass if aligned or below; Warn if local has seen
+///    a higher epoch than the binary trusts, which means the binary
+///    is stale and needs updating.
+///
+/// Part of #421 PR B — the §5 doctor surface the ADR calls for.
+fn check_trust_anchor(report: &mut Report) {
+    use aegis_trust::{TrustAnchor, load_seen_epoch};
+
+    let anchor = match TrustAnchor::load() {
+        Ok(a) => a,
+        Err(e) => {
+            report.add_with_next(
+                Verdict::Fail,
+                "trust: binary epoch floor".to_string(),
+                format!("trust-anchor load failed: {e}"),
+                "rebuild aegis-bootctl in-workspace so build.rs picks up \
+                 keys/canonical-epoch.json — out-of-workspace builds fall \
+                 back to the unsafe-default sentinel by design"
+                    .to_string(),
+            );
+            return;
+        }
+    };
+
+    let min_required = anchor.min_required();
+    let epoch_count = anchor.epochs().len();
+    report.add(
+        Verdict::Pass,
+        "trust: binary epoch floor".to_string(),
+        format!("MIN_REQUIRED_EPOCH={min_required}, {epoch_count} anchor(s) embedded (ADR 0002)"),
+    );
+
+    // Row 2 — seen-epoch state file. `load_seen_epoch` returns
+    // `epoch = 0` cleanly when the file is absent (first-run), so
+    // Pass here is the common case for a fresh install.
+    let seen = match load_seen_epoch() {
+        Ok(s) => s.epoch,
+        Err(e) => {
+            report.add_with_next(
+                Verdict::Fail,
+                "trust: seen-epoch".to_string(),
+                format!("load failed: {e}"),
+                format!(
+                    "inspect {} manually — it must be a bare decimal u32",
+                    aegis_trust::seen_epoch_path().display()
+                ),
+            );
+            return;
+        }
+    };
+    report.add(
+        Verdict::Pass,
+        "trust: seen-epoch".to_string(),
+        format!(
+            "local seen_epoch={seen} (state file: {})",
+            aegis_trust::seen_epoch_path().display()
+        ),
+    );
+
+    // Row 3 — drift. The effective verify floor is
+    // max(min_required, seen). If `seen` has already advanced beyond
+    // what the binary's MIN_REQUIRED_EPOCH knows about, the binary
+    // needs to be updated to trust the newer anchor.
+    if seen > min_required {
+        report.add_with_next(
+            Verdict::Warn,
+            "trust: drift".to_string(),
+            format!(
+                "local seen_epoch ({seen}) exceeds binary MIN_REQUIRED_EPOCH ({min_required}) \
+                 — this binary predates a key rotation"
+            ),
+            "update aegis-bootctl to a release that ships the newer epoch \
+             (ADR 0002 §3.4 — rotation is bundled with a release cut)"
+                .to_string(),
+        );
+    } else {
+        report.add(
+            Verdict::Pass,
+            "trust: drift".to_string(),
+            format!("aligned (floor = max({min_required}, {seen}) = {min_required})"),
+        );
+    }
+}
+
 fn check_cosign_optional(report: &mut Report) {
     let name = "command: cosign (optional)".to_string();
     if let Some(path) = which("cosign") {
@@ -1426,6 +1526,85 @@ mod tests {
         assert!(
             na.contains("pacman -S gptfdisk"),
             "remedy must name pacman pkg separately, got: {na}"
+        );
+    }
+
+    // ---- #421 PR B: trust-anchor rows ------------------------------------
+
+    #[test]
+    fn check_trust_anchor_emits_three_trust_prefixed_rows_in_happy_path() {
+        // In-workspace test builds always produce a valid TrustAnchor
+        // (build.rs resolves keys/canonical-epoch.json), and
+        // load_seen_epoch() treats a missing state file as epoch=0.
+        // So the happy path is exactly three rows, all namespaced
+        // "trust:" — matching the epic #421 UX contract.
+        let mut r = Report::new().with_json_mode(true);
+        check_trust_anchor(&mut r);
+        assert_eq!(
+            r.rows.len(),
+            3,
+            "expected 3 trust rows in happy path, got {:?}",
+            r.rows
+        );
+        for (_, name, _) in &r.rows {
+            assert!(
+                name.starts_with("trust:"),
+                "every row must be namespaced 'trust:', got {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn check_trust_anchor_first_row_reports_binary_epoch_floor() {
+        // Row 1 is the foundational fact: what MIN_REQUIRED_EPOCH was
+        // baked in at build time + how many anchors the binary ships.
+        // Operators need this to answer "does my binary know about
+        // the latest rotation?" — the value is the load-bearing field.
+        let mut r = Report::new().with_json_mode(true);
+        check_trust_anchor(&mut r);
+        let (verdict, name, detail) = &r.rows[0];
+        assert_eq!(*verdict, Verdict::Pass);
+        assert_eq!(name, "trust: binary epoch floor");
+        assert!(
+            detail.contains("MIN_REQUIRED_EPOCH="),
+            "detail must surface MIN_REQUIRED_EPOCH literal, got: {detail}"
+        );
+        assert!(
+            detail.contains("ADR 0002"),
+            "detail must cite ADR 0002 for traceability, got: {detail}"
+        );
+    }
+
+    #[test]
+    fn check_trust_anchor_second_row_reports_seen_epoch() {
+        let mut r = Report::new().with_json_mode(true);
+        check_trust_anchor(&mut r);
+        let (_, name, detail) = &r.rows[1];
+        assert_eq!(name, "trust: seen-epoch");
+        assert!(
+            detail.contains("local seen_epoch="),
+            "detail must surface the local counter, got: {detail}"
+        );
+        assert!(
+            detail.contains("state file:"),
+            "detail must name the state file path for operator discovery, got: {detail}"
+        );
+    }
+
+    #[test]
+    fn check_trust_anchor_third_row_is_drift_verdict() {
+        // Drift is Pass when seen <= min_required (the normal case
+        // on a fresh install where seen=0), or Warn when an older
+        // binary has ingested a newer epoch via a signed download.
+        // Either verdict is structurally valid; the test pins the
+        // row identity, not the verdict outcome.
+        let mut r = Report::new().with_json_mode(true);
+        check_trust_anchor(&mut r);
+        let (verdict, name, _) = &r.rows[2];
+        assert_eq!(name, "trust: drift");
+        assert!(
+            matches!(verdict, Verdict::Pass | Verdict::Warn),
+            "drift must be Pass or Warn (never Fail), got {verdict:?}"
         );
     }
 

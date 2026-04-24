@@ -8,7 +8,7 @@ mod seen_epoch;
 
 pub use anchor::{EpochEntry, TrustAnchor};
 pub use errors::TrustAnchorError;
-pub use seen_epoch::{SeenEpochState, load_seen_epoch, store_seen_epoch};
+pub use seen_epoch::{SeenEpochState, load_seen_epoch, seen_epoch_path, store_seen_epoch};
 
 /// Minimum epoch this binary trusts. Baked in at build time from
 /// `keys/canonical-epoch.json` via `build.rs`; falls back to `0`
