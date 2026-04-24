@@ -24,4 +24,5 @@
 //!
 //! [#418]: https://github.com/aegis-boot/aegis-boot/issues/418
 
+pub(crate) mod esp_stage;
 pub(crate) mod partition;
