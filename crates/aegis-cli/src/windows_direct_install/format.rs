@@ -124,7 +124,7 @@ pub(crate) fn build_format_ps_command(
 
 /// Run `powershell.exe -NoProfile -Command <build_format_ps_command>`
 /// against the target. Windows-only. Returns on successful exit;
-/// propagates PowerShell's stderr on non-zero exit.
+/// propagates `PowerShell`'s stderr on non-zero exit.
 #[cfg(target_os = "windows")]
 pub(crate) fn format_partition(physical_drive: u32, target: FormatTarget) -> Result<(), String> {
     use std::process::Command;

@@ -213,7 +213,7 @@ pub(crate) fn filter_flashable_drives(disks: &[PhysicalDisk]) -> Vec<PhysicalDis
     out
 }
 
-/// Top-level PowerShell invocation — Windows-only. Runs
+/// Top-level `PowerShell` invocation — Windows-only. Runs
 /// [`GET_DISKS_PS_COMMAND`], parses the JSON, filters via
 /// [`filter_flashable_drives`].
 #[cfg(target_os = "windows")]

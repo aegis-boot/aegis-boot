@@ -58,6 +58,14 @@ pub(crate) fn which(cmd: &str) -> Option<PathBuf> {
 /// On Windows, reads the env var and falls back to the canonical
 /// default if unset. On POSIX, always `None` — shells don't
 /// auto-append extensions.
+///
+/// Returning `Option<String>` even on POSIX (where it's always
+/// `None`) keeps the caller signature single-shaped. The caller
+/// passes `.as_deref()` straight into [`which_in_with_pathext`]
+/// whose `pathext: Option<&str>` is the contract — collapsing
+/// both platforms onto a bare `String` would force per-platform
+/// branching at every call site.
+#[allow(clippy::unnecessary_wraps)]
 fn pathext_for_lookup() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
