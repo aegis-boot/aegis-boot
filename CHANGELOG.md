@@ -4,6 +4,18 @@ All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](
 
 ## [Unreleased]
 
+### Windows `--direct-install` CLI dispatcher (#497 piece 4 — closes #497 + parent #483)
+
+`aegis-boot flash --direct-install` now works on Windows, completing the [epic #419](https://github.com/aegis-boot/aegis-boot/issues/419) Windows direct-install adapter. The dispatcher lives in `windows_direct_install::flash_dispatcher` and composes: drive-arg parsing → source resolution (from `--out-dir` with env overrides) → pipeline::run (preflight → partition → format ESP + AEGIS_ISOS → stage_esp).
+
+- Drive identifier accepts `1`, `PhysicalDrive1`, or `\\.\PhysicalDrive1` — no quoting gymnastics.
+- If no drive arg is given, the dispatcher lists flashable candidates and exits with a remediation hint ("re-run with an explicit drive argument"). No interactive prompt — WinRM / remote SSH invocations often have a closed stdin, and a silent prompt-hang is worse than a clear message.
+- `--yes` is required on the first operator-facing invocation (destructive-action guard). Without it, the dispatcher surfaces the candidate list and exits 2.
+- Receipt-formatted per-stage timing report on success matches the shape of Linux's `flash_direct_install` ending output.
+- Pure core `run_direct_install_using(explicit_dev, out_dir, enumerate_fn, runner)` takes injected enumerator + `PhaseRunner`, so the full happy-path + 5 error-path branches are Linux-testable without PowerShell (15 new unit tests).
+
+macOS gets a clearer refusal: the cfg-gated error message now points at #418 (macOS adapter tracker) instead of the generic "Linux-only" text.
+
 ### Windows drive enumeration (#497 piece 3)
 
 New `windows_direct_install::drive_enumeration` module wraps `Get-Disk | ConvertTo-Json` so the CLI can list flashable physical drives, filtered to safe candidates (not disk 0, not `IsBoot`, not `IsSystem`, not read-only, ≥1 GiB). Pure-fn JSON parser + filter are unit-tested on Linux via canned output; the subprocess wrapper is Windows-gated. 14 tests cover the Win11-VM canned output shape, BOM-prefix tolerance, missing-optional-field tolerance, every filter predicate, stable ordering, human-readable size formatting, and `BusType` integer-enum mapping.
