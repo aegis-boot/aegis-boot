@@ -258,17 +258,20 @@ fn try_download_signature(url: &str, out: &Path, suffix_label: &str) -> bool {
 }
 
 /// The cosign identity regex hardcoded for aegis-boot's own releases.
-/// Matches `release.yml` at any tag ref (`refs/tags/...`) on the
-/// upstream repository. Forks that publish their own releases with
-/// their own OIDC identity need a different CLI tool — this one is
-/// bound to `aegis-boot/aegis-boot` by design.
+/// Matches `release.yml` at any `v`-prefixed tag ref
+/// (`refs/tags/v...`) on the upstream repository — every real release
+/// tag is shaped `v0.N.M`, and the `v` requirement keeps the code in
+/// lock-step with `docs/RELEASE_NOTES_FOOTER.md`'s documented
+/// verification recipe (closes #539). Forks that publish their own
+/// releases with their own OIDC identity need a different CLI tool
+/// — this one is bound to `aegis-boot/aegis-boot` by design.
 ///
 /// If we're wrong about this regex shape, the worst that happens is
 /// a FAILED verification on otherwise-correct artifacts — operators
 /// see the failure, can manually re-verify with an adjusted regex,
 /// and we fix the regex in a point release.
 const COSIGN_IDENTITY_REGEX: &str =
-    r"^https://github\.com/aegis-boot/aegis-boot/\.github/workflows/release\.yml@refs/tags/.+$";
+    r"^https://github\.com/aegis-boot/aegis-boot/\.github/workflows/release\.yml@refs/tags/v.+$";
 
 /// The Sigstore OIDC issuer for GitHub Actions' ambient OIDC tokens.
 /// This is a stable public endpoint; hardcoding is intentional.
@@ -805,8 +808,23 @@ mod tests {
         // this CLI would accept. Spot-check the anchor + path shape.
         assert!(COSIGN_IDENTITY_REGEX.starts_with("^https://github\\.com/aegis-boot/aegis-boot/"));
         assert!(COSIGN_IDENTITY_REGEX.contains(".github/workflows/release\\.yml"));
-        assert!(COSIGN_IDENTITY_REGEX.contains("refs/tags/"));
+        assert!(COSIGN_IDENTITY_REGEX.contains("refs/tags/v"));
         assert!(COSIGN_IDENTITY_REGEX.ends_with(".+$"));
+    }
+
+    #[test]
+    fn cosign_identity_regex_requires_v_prefix() {
+        // #539 — the regex MUST require the `v` prefix on tag refs so
+        // code + docs/RELEASE_NOTES_FOOTER.md stay in lock-step. A
+        // future drift that dropped the `v` back to bare-`.+` would
+        // silently re-widen the acceptance surface. The regex isn't
+        // compiled in-test (no regex crate dep — cosign does the
+        // matching); we pin the shape by asserting the 4-char `v.+$`
+        // suffix literal.
+        assert!(
+            COSIGN_IDENTITY_REGEX.ends_with("v.+$"),
+            "regex must end with `v.+$` — got: {COSIGN_IDENTITY_REGEX}"
+        );
     }
 
     #[test]
