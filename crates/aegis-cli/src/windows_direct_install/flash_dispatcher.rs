@@ -89,7 +89,7 @@ pub(crate) enum DispatchError {
     /// should render the candidate list and exit with a typical
     /// "usage" status (2).
     NeedsExplicitDrive(Vec<PhysicalDisk>),
-    /// Drive arg supplied but unparseable.
+    /// Drive arg supplied but unparsable.
     BadDriveArg(String),
     /// Source resolution failed (missing files, etc.).
     Sources(SourceResolutionError),

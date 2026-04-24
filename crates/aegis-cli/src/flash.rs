@@ -362,12 +362,20 @@ fn print_help() {
     println!("                     device as its ISO partition (#242). Rare — use when you");
     println!("                     deliberately want the small mkusb-default partition size.");
     println!("  --direct-install = bypass mkusb.sh + dd. Partition + format + stage the signed");
-    println!("                     boot chain in place. Linux: sgdisk + mkfs.{{fat,exfat}} + mtools.");
-    println!("                     Windows: diskpart + Format-Volume + windows-rs raw-write (#497).");
+    println!(
+        "                     boot chain in place. Linux: sgdisk + mkfs.{{fat,exfat}} + mtools."
+    );
+    println!(
+        "                     Windows: diskpart + Format-Volume + windows-rs raw-write (#497)."
+    );
     println!("                     ~30 sec vs ~4 min on USB 2.0. Mutually exclusive with --image.");
     println!("  --out-dir PATH   = directory holding the signed-chain files for --direct-install.");
-    println!("                     Default: ./out (mkusb.sh convention). Windows operators can also");
-    println!("                     override individual files via AEGIS_{{SHIM,GRUB,MM,KERNEL,INITRD}}_SRC.");
+    println!(
+        "                     Default: ./out (mkusb.sh convention). Windows operators can also"
+    );
+    println!(
+        "                     override individual files via AEGIS_{{SHIM,GRUB,MM,KERNEL,INITRD}}_SRC."
+    );
 }
 
 /// Build the typed `Plan` describing what `aegis-boot flash` would do
