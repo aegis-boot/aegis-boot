@@ -23,7 +23,12 @@
 class AegisBoot < Formula
   desc "Signed UEFI Secure Boot rescue environment for booting any ISO from USB"
   homepage "https://github.com/aegis-boot/aegis-boot"
-  version "0.17.0"
+  # Version is auto-scanned by `brew` from the release URL below (the
+  # `v0.17.0` path segment). Declaring it here explicitly would fail
+  # `brew audit --strict` with "redundant with version scanned from URL".
+  # release.yml's bump-brew-formula sed-bump of this line is now a
+  # no-op since the line doesn't exist; the URL-bump awk still runs
+  # on the `url "..."` line below and carries the version forward.
   license any_of: ["Apache-2.0", "MIT"]
 
   # Runtime dependencies the operator CLI shells out to. Listed
