@@ -13,6 +13,15 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  # #409 opt-in test (2026-04-24): force every JavaScript-based GitHub
+  # Action to run on Node.js 24 instead of the Node.js 20 default.
+  # GitHub will flip this to the default on 2026-06-02 and fully
+  # remove Node 20 on 2026-09-16; running a full CI sweep now surfaces
+  # any action that breaks under Node 24 while there's still headroom
+  # to pin a fix. If this sweep is green, #409 can close as "auto-
+  # cutover will be a no-op on this repo." If anything fails, pin the
+  # specific action to a Node 24 release.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   test:
