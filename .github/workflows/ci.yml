@@ -192,6 +192,21 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - run: cargo run -p aegis-bootctl --bin constants-docgen --features docgen --locked -- --check
 
+  # Trust-anchors drift-check (ADR 0002 / #421 follow-up).
+  # Fails the PR if the committed epoch-history table in
+  # docs/architecture/KEY_MANAGEMENT.md doesn't match what
+  # `keys/historical-anchors.json` + `keys/canonical-epoch.json`
+  # render. Any key rotation MUST also bump the doc in the same PR.
+  trust-anchors-drift:
+    name: Doc trust-anchors drift-check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+      - name: Install Rust
+        run: rustup toolchain install 1.88.0 --profile minimal && rustup override set 1.88.0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - run: cargo run -p aegis-bootctl --bin trust-anchors-docgen --features docgen --locked -- --check
+
   # CLI subcommand + synopsis drift-check (Phase 3a + 3b of #289 / #286).
   # Phase 3a: validates every dispatch-table subcommand has a
   # `## `aegis-boot X`` heading in docs/CLI.md and a `.TP` entry in
