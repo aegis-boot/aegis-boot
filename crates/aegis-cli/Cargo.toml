@@ -62,6 +62,10 @@ iso-probe = { path = "../iso-probe", version = "0.17" }
 # This crate is the Rust + JSON Schema source of truth for the
 # on-disk aegis-boot-manifest.json wire format.
 aegis-wire-formats = { path = "../aegis-wire-formats", version = "0.17" }
+# ADR 0002 trust anchor (#421). Consumed by `aegis-boot doctor` to
+# surface MIN_REQUIRED_EPOCH / seen-epoch drift; future: migrate the
+# attestation-manifest verify path off the bare minisign handle.
+aegis-trust = { path = "../aegis-trust", version = "0.17" }
 # Atomic random-name temp files for write_sidecar_via_sudo's
 # stage-then-copy path. Use the runtime dep (not the dev-dep) so the
 # staging path is not predictable — closes the TOCTOU window semgrep
