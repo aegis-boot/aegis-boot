@@ -114,6 +114,12 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs<'_>, u8> {
     Ok(p)
 }
 
+// Dispatcher that routes `aegis-boot flash` across the Linux / Windows
+// / macOS direct-install paths plus the default mkusb.sh-style flash.
+// Each cfg-gated branch is a short sequential narrative — splitting
+// into helpers would fragment the "parse args → validate → dispatch"
+// flow without improving readability. Narrow allow with rationale.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
     let p = parse_args(args)?;
     if p.help_requested {
@@ -144,14 +150,15 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
         return Err(2);
     }
     // --direct-install: Linux shells out to sgdisk + mkfs.fat +
-    // mkfs.exfat + mtools; Windows (#497) composes diskpart + Format-
-    // Volume + windows-rs raw-write in crate::windows_direct_install.
-    // macOS remains unsupported (tracked as #418 — macOS adapter).
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    // mkfs.exfat + mtools; Windows (#497) composes diskpart +
+    // Format-Volume + windows-rs raw-write in crate::windows_direct_install;
+    // macOS (#418) composes diskutil + cp + /bin/sync in
+    // crate::macos_direct_install. Other platforms (e.g. FreeBSD)
+    // remain explicitly refused.
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     if direct_install {
         eprintln!(
-            "aegis-boot flash: --direct-install is only supported on Linux + Windows. \
-             macOS support tracked in #418."
+            "aegis-boot flash: --direct-install is only supported on Linux + Windows + macOS."
         );
         return Err(2);
     }
@@ -182,6 +189,24 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
         }
         let resolved_out_dir = out_dir.unwrap_or_else(|| PathBuf::from("./out"));
         return run_windows_direct_install(explicit_dev, &resolved_out_dir, assume_yes);
+    }
+
+    // macOS --direct-install path (#418): same shape as the Windows
+    // handoff but routes to the diskutil + cp + /bin/sync pipeline
+    // in crate::macos_direct_install. No interactive drive-candidate
+    // prompt — macOS operators use `diskutil list` for target
+    // discovery, and aegis-boot won't try to reproduce that.
+    #[cfg(target_os = "macos")]
+    if direct_install {
+        if dry_run {
+            eprintln!(
+                "aegis-boot flash --direct-install on macOS: --dry-run \
+                 is not yet supported (no typed Plan shape for macOS)."
+            );
+            return Err(2);
+        }
+        let resolved_out_dir = out_dir.unwrap_or_else(|| PathBuf::from("./out"));
+        return run_macos_direct_install(explicit_dev, &resolved_out_dir);
     }
 
     // Step 1: select drive.
@@ -303,6 +328,43 @@ fn finalize_windows_dispatch(
         Err(err @ DispatchError::NeedsExplicitDrive(_)) => {
             // Print the candidate list + remediation to stderr so
             // operators see it even when stdout is redirected.
+            eprintln!("{err}");
+            Err(2)
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            Err(1)
+        }
+    }
+}
+
+/// macOS `--direct-install` entry — thin wrapper around the
+/// macOS dispatcher. No interactive candidate prompt (see
+/// `macos_direct_install::flash_dispatcher` for rationale); the
+/// dispatcher itself surfaces a clean "run `diskutil list`" message
+/// on missing argument.
+///
+/// Unlike Windows we don't require `--yes` as a separate flag here
+/// — macOS's preflight stage already refuses `disk0` (the boot
+/// drive) on shape alone, and an explicit typed device ID plus the
+/// destructive-action preflight gate is the same safety shape as
+/// the Linux path.
+#[cfg(target_os = "macos")]
+fn run_macos_direct_install(explicit_dev: Option<&str>, out_dir: &Path) -> Result<(), u8> {
+    use crate::macos_direct_install::flash_dispatcher::{
+        DispatchError, format_receipt, run_direct_install,
+    };
+    match run_direct_install(explicit_dev, out_dir) {
+        Ok(receipt) => {
+            println!("\nDirect-install complete.");
+            print!("{}", format_receipt(&receipt));
+            Ok(())
+        }
+        Err(err @ DispatchError::MissingDeviceArg) => {
+            eprintln!("{err}");
+            Err(2)
+        }
+        Err(err @ DispatchError::BadDeviceArg(_)) => {
             eprintln!("{err}");
             Err(2)
         }

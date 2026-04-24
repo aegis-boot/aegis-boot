@@ -25,6 +25,7 @@
 //! [#418]: https://github.com/aegis-boot/aegis-boot/issues/418
 
 pub(crate) mod esp_stage;
+pub(crate) mod flash_dispatcher;
 pub(crate) mod partition;
 pub(crate) mod pipeline;
 pub(crate) mod preflight;
