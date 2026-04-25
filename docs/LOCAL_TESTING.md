@@ -6,6 +6,62 @@ While GitHub Actions CI is the primary validation gate, you can run the full mat
 - You're iterating on the QEMU-adjacent jobs (`mkusb`, `OVMF SecBoot E2E`, `kexec E2E`) that take several minutes to hit on CI.
 - CI is unavailable (rare; outage or quota issue).
 
+## TL;DR — `tools/local-ci.sh`
+
+The fastest path to "did my change just break a QEMU E2E?" without pushing to CI:
+
+```bash
+tools/local-ci.sh quick        # cargo fmt + check + clippy + lib tests (~9s on a Framework laptop)
+tools/local-ci.sh kexec        # rescue-tui → target-kernel kexec under QEMU (~3 min)
+tools/local-ci.sh ovmf-secboot # SB-enforcing signed chain → rescue-tui (~4 min)
+tools/local-ci.sh mkusb        # build USB image + boot smoke (~4 min)
+tools/local-ci.sh qemu-smoke   # minimal initramfs boot (~2 min)
+tools/local-ci.sh thumb-drive --confirm-write /dev/sdX  # real USB (operator-only)
+tools/local-ci.sh all          # full suite sans thumb-drive (~12 min)
+```
+
+Each subcommand wraps the same `scripts/*.sh` that the corresponding `.github/workflows/*.yml` runs in CI — no reimplementation, just a friendlier dispatcher with prerequisite checks. Toolchain auto-pins to `cargo +1.88.0` if available so local lints match CI's lint set exactly.
+
+### Decision tree — what to run before pushing
+
+| You changed                                | Run locally before push                                  |
+| ------------------------------------------ | -------------------------------------------------------- |
+| Only `*.md` / `docs/**` / `LICENSE*`       | nothing — CI fast-path skips the E2E suite (see below)   |
+| Any Rust source under `crates/`            | `tools/local-ci.sh quick`                                |
+| `crates/rescue-tui/` UI or state           | `quick` + `kexec` + `ovmf-secboot`                       |
+| `crates/aegis-cli/src/flash.rs` or detect  | `quick` + `mkusb` + `direct-install`                     |
+| `crates/iso-probe/` or `iso-parser/`       | `quick` + `kexec`                                        |
+| `scripts/build-initramfs.sh` or `/init`    | `quick` + `kexec` + `qemu-smoke`                         |
+| `scripts/mkusb.sh` or USB layout           | `quick` + `mkusb`                                        |
+| `crates/aegis-trust/` or epoch handling    | `quick` + `update-rotate` (when needed)                  |
+| Multi-area refactor                        | `tools/local-ci.sh all`                                  |
+
+### When CI is still authoritative — local can NOT replace these
+
+These checks ship only in CI (different runner OS, different toolchains, or dependent on GitHub-side state):
+
+- **macOS native smoke** (`macos-14`) — needs an Apple-Silicon runner
+- **Windows cargo-check** (`windows-2022`) — needs a Windows runner
+- **CodeQL** (Rust + Actions analysis) — GitHub-managed scan
+- **Reproducible build verification** — two full builds + byte-parity diff (you can run `tools/local-ci.sh quick` to catch the same code, but the byte-parity is CI-only)
+- **OpenSSF Scorecard** — GitHub-managed weekly evaluation
+- **Secret scanning (gitleaks)**, **SAST (semgrep)**, **cargo-deny advisories** — fast on CI, not worth replicating
+- **CycloneDX SBOM generation** — release-artifact concern
+- **Doc drift checks** (CLI subcommand, manifest schema, trust-anchors, version, constants, trust-tier) — these *should* run on doc PRs since they catch the case where a doc claims X but the binary surface says Y; they're cheap on CI so no local equivalent shipped
+
+After Phase 1 of [#580](https://github.com/aegis-boot/aegis-boot/issues/580), the 6 expensive QEMU E2E workflows + reproducible-build skip on docs-only PRs (markdown / `docs/` / issue templates / LICENSE), so a docs-only PR's CI completes in ~2 min instead of ~5+ min.
+
+### Common failure-mode triage
+
+| Symptom                                                       | First place to look                                                |
+| ------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `qemu-system-x86_64` not found                                | `apt-get install qemu-system-x86` (or distro equivalent)           |
+| OVMF firmware not found                                       | `apt-get install ovmf` — check `/usr/share/OVMF/` paths            |
+| `cargo +1.88.0` not installed (warns once per run)            | `rustup toolchain install 1.88.0` — matches CI's pinned toolchain  |
+| `quick` clippy fails locally but green on CI                  | newer Rust on host adds lints CI's 1.88.0 doesn't have — run with the pin |
+| `kexec` / `ovmf-secboot` hangs                                | `TIMEOUT_SECONDS=300 tools/local-ci.sh kexec` (default 180s); also check `/boot/vmlinuz-*` is mode 0644 (mcopy needs to read it) |
+| `thumb-drive` aborts with "not flagged removable"             | by design — refusing NVMe even with `--confirm-write`. Use `lsblk` to find the USB; ensure it's the right `/dev/sdX` |
+
 ## One-time setup
 
 ```bash
