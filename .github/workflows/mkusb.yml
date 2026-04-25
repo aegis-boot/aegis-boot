@@ -36,6 +36,13 @@ jobs:
         with:
           packages: qemu-system-x86 ovmf shim-signed grub-efi-amd64-signed linux-image-virtual mtools dosfstools exfatprogs gdisk busybox-static cpio
           version: '1.0'
+          # #617 latent regression on cache-hit: kernel-package
+          # post-install hooks (which create /boot/vmlinuz-* and
+          # /boot/initrd.img-*) don't run on cache-restore by default.
+          # `execute_install_scripts: true` re-runs them after the
+          # cached .debs are restored — the documented fix per
+          # awalsh128/cache-apt-pkgs-action's README.
+          execute_install_scripts: true
       - name: Make kernel/initrd readable for mcopy
         run: |
           # Kernels mode 0600; we need them readable for mcopy.

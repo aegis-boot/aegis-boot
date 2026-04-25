@@ -61,6 +61,11 @@ jobs:
         with:
           packages: qemu-system-x86 ovmf shim-signed grub-efi-amd64-signed linux-image-generic mtools dosfstools exfatprogs gdisk busybox-static cpio
           version: '1.0'
+          # See mkusb.yml — kernel post-install hooks need to re-run on
+          # cache-restore so /boot/vmlinuz-*-generic +
+          # /boot/initrd.img-*-generic are present for mcopy.
+          # (#617 follow-up fix.)
+          execute_install_scripts: true
       - name: Make kernel/initrd readable for mcopy
         run: |
           # Kernels under /boot are typically 0600; SB E2E needs them readable.

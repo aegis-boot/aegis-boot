@@ -42,6 +42,10 @@ jobs:
         with:
           packages: qemu-system-x86 ovmf shim-signed grub-efi-amd64-signed linux-image-virtual mtools dosfstools exfatprogs gdisk busybox-static cpio util-linux diffutils
           version: '1.0'
+          # See mkusb.yml — kernel post-install hooks need to re-run on
+          # cache-restore so /boot/vmlinuz-* + /boot/initrd.img-* are
+          # present for mcopy. (#617 follow-up fix.)
+          execute_install_scripts: true
       - name: Make kernel/initrd readable for mcopy
         run: |
           sudo chmod 0644 /boot/vmlinuz-* /boot/initrd.img-* 2>/dev/null || true
