@@ -141,6 +141,7 @@ fn screen_short_name(s: ScreenKind) -> String {
         ScreenKind::Help => "Help",
         ScreenKind::ConfirmQuit => "ConfirmQuit",
         ScreenKind::Quitting => "Quitting",
+        ScreenKind::BlockedToast => "BlockedToast",
     };
     name.to_string()
 }

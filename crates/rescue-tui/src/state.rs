@@ -84,6 +84,20 @@ pub enum Screen {
     },
     /// User asked to quit; main loop should exit cleanly.
     Quitting,
+    /// "Cannot boot" toast surfaced when the operator presses Enter
+    /// over a List row that refuses kexec — currently fires for
+    /// tier-4 (parse-failed) ISOs, where `confirm_selection`'s silent
+    /// no-op left operators wondering whether the keypress registered.
+    /// Any key dismisses; `return_to` restores the cursor position.
+    /// (#546 — UX review T3C.)
+    BlockedToast {
+        /// Single-line "Cannot boot: <reason>" message shown in the
+        /// popup. Pre-sanitized — see `failed_iso_toast_message`.
+        message: String,
+        /// Cursor position to restore on dismiss so the operator
+        /// returns to the same row they tried.
+        return_to: usize,
+    },
 }
 
 /// Top-level application state.
@@ -774,9 +788,43 @@ impl AppState {
     /// [`RESCUE_SHELL_EXIT_CODE`] in that case).
     pub fn confirm_selection(&mut self) {
         if let Screen::List { selected } = self.screen {
-            if let Some(ViewEntry::Iso(real)) = self.view_entry(selected) {
-                self.screen = Screen::Confirm { selected: real };
+            match self.view_entry(selected) {
+                Some(ViewEntry::Iso(real)) => {
+                    self.screen = Screen::Confirm { selected: real };
+                }
+                Some(ViewEntry::FailedIso(idx)) => {
+                    // #546: tier-4 rows refused Enter silently. Surface
+                    // the parse-failed reason as a toast rather than
+                    // leaving the operator wondering if Enter registered.
+                    let message = self.failed_iso_toast_message(idx);
+                    self.screen = Screen::BlockedToast {
+                        message,
+                        return_to: selected,
+                    };
+                }
+                _ => {}
             }
+        }
+    }
+
+    /// Compose the "Cannot boot:" toast message for a tier-4 (`FailedIso`)
+    /// row at `idx`. Falls back to a generic message if the index is
+    /// out of bounds (defensive — `view_entry` should have validated it).
+    fn failed_iso_toast_message(&self, idx: usize) -> String {
+        match self.failed_isos.get(idx) {
+            Some(failed) => format!("Cannot boot: parse failed — {}", failed.reason),
+            None => "Cannot boot: parse failed (no reason available)".to_string(),
+        }
+    }
+
+    /// Dismiss the `BlockedToast` and return the cursor to the row the
+    /// operator originally tried. Any-key dismissal — `main.rs` binds
+    /// every keypress to this in the `BlockedToast` branch.
+    pub fn dismiss_blocked_toast(&mut self) {
+        if let Screen::BlockedToast { return_to, .. } = self.screen {
+            self.screen = Screen::List {
+                selected: return_to,
+            };
         }
     }
 
@@ -1536,6 +1584,70 @@ mod tests {
         s.filter = "debian".to_string();
         s.confirm_selection();
         assert_eq!(s.screen, Screen::Confirm { selected: 1 });
+    }
+
+    // ---- BlockedToast (#546 UX T3C) -----------------------------------
+
+    fn fake_failed_iso(reason: &str) -> iso_probe::FailedIso {
+        iso_probe::FailedIso {
+            iso_path: std::path::PathBuf::from("/run/media/AEGIS_ISOS/broken.iso"),
+            reason: reason.to_string(),
+            kind: iso_probe::FailureKind::NoBootEntries,
+        }
+    }
+
+    #[test]
+    fn confirm_selection_over_failed_iso_opens_blocked_toast() {
+        // #546: tier-4 rows (FailedIso) used to refuse Enter silently.
+        // Now they route to a BlockedToast popup whose message includes
+        // the parse-failed reason so the operator gets immediate
+        // feedback instead of "did Enter even register?"
+        let mut s =
+            AppState::new(vec![]).with_failed_isos(vec![fake_failed_iso("kernel/initrd missing")]);
+        // Cursor at 0 = the FailedIso row (no real ISOs, so it's first).
+        s.screen = Screen::List { selected: 0 };
+        s.confirm_selection();
+        match &s.screen {
+            Screen::BlockedToast { message, return_to } => {
+                assert!(
+                    message.contains("kernel/initrd missing"),
+                    "toast message must include the parse-failed reason, got: {message}"
+                );
+                assert!(message.starts_with("Cannot boot:"), "got: {message}");
+                assert_eq!(*return_to, 0, "cursor preserved for dismissal");
+            }
+            other => panic!("expected BlockedToast, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dismiss_blocked_toast_returns_to_list_at_original_cursor() {
+        let mut s = AppState::new(vec![fake_iso("a"), fake_iso("b")]);
+        s.screen = Screen::BlockedToast {
+            message: "Cannot boot: parse failed — synthetic test reason".to_string(),
+            return_to: 1,
+        };
+        s.dismiss_blocked_toast();
+        assert_eq!(s.screen, Screen::List { selected: 1 });
+    }
+
+    #[test]
+    fn dismiss_blocked_toast_no_op_outside_toast_screen() {
+        // Defensive: dismiss called from any non-toast screen must not
+        // mutate state (would otherwise mask other UI bugs).
+        let mut s = AppState::new(vec![fake_iso("a")]);
+        let before = s.screen.clone();
+        s.dismiss_blocked_toast();
+        assert_eq!(s.screen, before);
+    }
+
+    #[test]
+    fn confirm_selection_iso_row_unchanged_by_blocked_toast_addition() {
+        // Regression guard: the FailedIso branch I added must not
+        // change the existing ViewEntry::Iso → Screen::Confirm path.
+        let mut s = AppState::new(vec![fake_iso("ubuntu")]);
+        s.confirm_selection();
+        assert_eq!(s.screen, Screen::Confirm { selected: 0 });
     }
 
     // --- rescue-shell entry (#90) -------------------------------------

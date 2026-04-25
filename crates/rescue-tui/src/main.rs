@@ -353,6 +353,14 @@ where
             continue;
         }
 
+        // BlockedToast (#546) — any key dismisses back to List. Lives
+        // here alongside Help/ConfirmQuit so the toast doesn't fall
+        // through to the main match's per-screen bindings.
+        if matches!(state.screen, Screen::BlockedToast { .. }) {
+            state.dismiss_blocked_toast();
+            continue;
+        }
+
         let in_editor = matches!(state.screen, Screen::EditCmdline { .. });
         let in_filter_input = state.filter_editing;
 
