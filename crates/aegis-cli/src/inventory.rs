@@ -1084,32 +1084,47 @@ fn copy_classic_sidecars(iso_src: &Path, iso_filename: &str, mount: &Path) -> Ve
 fn print_add_help() {
     println!("aegis-boot add — copy an ISO onto the stick with verification");
     println!();
-    println!("USAGE: aegis-boot add <iso-file-or-catalog-slug> [/dev/sdX | /mnt/aegis-isos]");
-    println!("                  [--folder NAME]");
-    println!("                  [--description TEXT] [--version VER] [--category CAT]");
+    println!("USAGE:");
+    println!("  aegis-boot add <iso-file-or-catalog-slug> [/dev/sdX | /mnt/aegis-isos]");
+    println!("                 [--folder NAME] [--description TEXT]");
+    println!("                 [--version VER] [--category CAT]");
     println!();
-    println!("       aegis-boot add --scan [/dev/sdX | /mnt/aegis-isos]");
+    println!("  aegis-boot add --scan [/dev/sdX | /mnt/aegis-isos]");
     println!();
-    println!("If the first arg is NOT a file on disk but IS a known catalog slug");
-    println!("(e.g. 'ubuntu-24.04-live-server'), add fetches + verifies it first,");
-    println!("then stages the cached copy — collapses 'fetch X && add <path>' (#352).");
+    println!("OPTIONS:");
+    println!("  --folder NAME        Place the ISO + sidecars under AEGIS_ISOS/NAME/");
+    println!("                       instead of the root (single path segment, no '/',");
+    println!("                       no '..', no leading '.', no whitespace, ≤64 bytes).");
+    println!("  --description TEXT   Sidecar metadata: human-readable description shown");
+    println!("                       in rescue-tui in place of the bare filename.");
+    println!("  --version VER        Sidecar metadata: ISO version stamp (e.g. \"24.04.1\").");
+    println!("  --category CAT       Sidecar metadata: grouping tag (e.g. \"rescue\",");
+    println!("                       \"installer\"). Free text — rescue-tui groups by it.");
+    println!("  --scan               Walk AEGIS_ISOS looking for .iso files without");
+    println!("                       .sha256 sidecars, hash each, write the missing");
+    println!("                       sidecar. Existing sidecars verified, never");
+    println!("                       overwritten (a mismatch is a tamper signal).");
+    println!("  -h, --help           Show this help and exit.");
     println!();
-    println!("--folder NAME places the ISO + sidecars under AEGIS_ISOS/NAME/ instead");
-    println!("of the root. list + rescue-tui handle both layouts transparently (#274");
-    println!("Phase 6a). Name must be a single path segment (no '/', no '..', no");
-    println!("leading '.', no whitespace, ≤64 bytes, no exFAT-reserved chars).");
+    println!("EXAMPLES:");
+    println!("  aegis-boot add debian-12.7.0-amd64-netinst.iso");
+    println!("  aegis-boot add debian-12 --folder rescue --description \"Debian 12 net-install\"");
+    println!(
+        "  aegis-boot add ubuntu-24.04-live-server   # arg matches a catalog slug → auto-fetch"
+    );
+    println!("  aegis-boot add --scan /mnt/aegis-isos     # backfill sha256 sidecars in place");
     println!();
-    println!("Optional sidecar metadata (#246) is written next to the ISO as");
-    println!("<iso>.aegis.toml so rescue-tui can show 'Network-install Debian 12'");
-    println!("instead of the bare filename. The sidecar is unsigned cosmetic");
-    println!("metadata — boot decisions still key off the sha256-attested manifest.");
-    println!();
-    println!("--scan (#479) walks AEGIS_ISOS looking for .iso files without .sha256");
-    println!("sidecars, streams each through sha256, and writes coreutils-compatible");
-    println!("sidecars so rescue-tui upgrades them from tier 2 (BareUnverified) to");
-    println!("tier 1 (OperatorAttested). Existing sidecars are verified but never");
-    println!("overwritten — a mismatch surfaces as a tamper signal instead. Minisig");
-    println!("sidecars can't be generated (would need the operator's private key).");
+    println!("BEHAVIOR:");
+    println!("  - If the first arg is NOT a file on disk but IS a known catalog slug");
+    println!("    (e.g. 'ubuntu-24.04-live-server'), add fetches + verifies it first,");
+    println!("    then stages the cached copy — collapses 'fetch X && add <path>' (#352).");
+    println!("  - Sidecar metadata (#246) is written next to the ISO as <iso>.aegis.toml");
+    println!("    so rescue-tui can show 'Network-install Debian 12' instead of the");
+    println!("    bare filename. The sidecar is unsigned cosmetic metadata — boot");
+    println!("    decisions still key off the sha256-attested manifest.");
+    println!("  - --scan upgrades AEGIS_ISOS entries from tier 2 (BareUnverified) to");
+    println!("    tier 1 (OperatorAttested) where possible. Minisig sidecars can't be");
+    println!("    generated this way (would need the operator's private key).");
 }
 
 /// #352 UX-4: resolve the `<iso-or-slug>` positional arg to a file
