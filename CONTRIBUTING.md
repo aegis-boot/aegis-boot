@@ -2,6 +2,8 @@
 
 Thanks for your interest. This is a small project with a sharp focus — a signed UEFI Secure Boot rescue environment that `kexec`s into operator-selected ISOs. Patches that move us toward that goal are welcome.
 
+> **AI coding agents:** read [AGENTS.md](./AGENTS.md) first. Same workflow as below, distilled for agents plus security-critical guardrails (sensitive surfaces, common traps, when to escalate).
+
 ## Quickstart
 
 ```bash

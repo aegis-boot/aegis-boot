@@ -162,6 +162,7 @@ Full developer loop: [docs/LOCAL_TESTING.md](./docs/LOCAL_TESTING.md).
 **For contributors**
 
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — patch workflow, conventions, PR bar
+- [AGENTS.md](./AGENTS.md) — vendor-neutral guidance for AI coding agents (security guardrails, sensitive surfaces, common traps)
 - [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — one-page mental model
 - [BUILDING.md](./BUILDING.md) — reproducible build setup (Docker + Nix)
 - [docs/LOCAL_TESTING.md](./docs/LOCAL_TESTING.md) — 8-stage local CI equivalent
