@@ -296,14 +296,30 @@ where
                             state.iso_being_verified().map(|i| i.iso_path.clone())
                         {
                             match save_verify_audit_log(&iso_path, &outcome) {
-                                Ok(path) => tracing::info!(
-                                    path = %path.display(),
-                                    "verify-now: audit-log line written"
-                                ),
-                                Err(e) => tracing::warn!(
-                                    error = %e,
-                                    "verify-now: audit-log write failed (continuing)"
-                                ),
+                                Ok(path) => {
+                                    tracing::info!(
+                                        path = %path.display(),
+                                        "verify-now: audit-log line written"
+                                    );
+                                    // #602: a successful write supersedes any
+                                    // prior failure banner — the audit trail
+                                    // is intact again, so dismiss the warning.
+                                    state.clear_audit_warning();
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "verify-now: audit-log write failed (continuing)"
+                                    );
+                                    // #602: surface the failure inline on the
+                                    // Confirm screen so the operator sees
+                                    // "verdict shown but not persisted" before
+                                    // deciding whether to kexec. The kexec
+                                    // gate itself is unaffected.
+                                    state.set_audit_warning(format!(
+                                        "audit log write failed ({e}) — verdict shown but not persisted"
+                                    ));
+                                }
                             }
                         }
                         state.verify_finish(outcome);

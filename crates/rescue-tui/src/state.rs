@@ -162,6 +162,15 @@ pub struct AppState {
     /// [`Pane::Info`]. Resets to 0 when the list selection changes —
     /// per-ISO scrollback would be confusing. (#458 / #459)
     pub info_scroll: u16,
+    /// Non-blocking warning banner rendered on the Confirm screen when
+    /// the verify-now JSONL audit log (#548) failed to write. Lets the
+    /// operator see "verdict shown but not persisted" inline with the
+    /// verdict instead of having that signal go only to journald where
+    /// the booted-stick operator can't see it. Set by `main.rs` when
+    /// `save_verify_audit_log()` returns `Err`; cleared whenever a new
+    /// verify succeeds, since the new line replaces the missing one.
+    /// (#602)
+    pub audit_warning: Option<String>,
 }
 
 /// Sort order applied to the List view. Cycled with the `s` key.
@@ -378,7 +387,25 @@ impl AppState {
             skipped_iso_count: 0,
             pane: Pane::default(),
             info_scroll: 0,
+            audit_warning: None,
         }
+    }
+
+    /// Set the non-blocking audit-log warning banner shown on the Confirm
+    /// screen. Called by `main.rs` when `save_verify_audit_log()` fails
+    /// after a successful verify-now. The verdict still propagates and
+    /// kexec-gating is unaffected — only the audit-trail integrity
+    /// signal is surfaced. (#602)
+    pub fn set_audit_warning(&mut self, msg: impl Into<String>) {
+        self.audit_warning = Some(msg.into());
+    }
+
+    /// Clear the audit-log warning banner. Called when a subsequent
+    /// verify-now succeeds and writes a fresh JSONL line — the new line
+    /// supersedes the previous "missing" state, so the warning would be
+    /// stale. (#602)
+    pub fn clear_audit_warning(&mut self) {
+        self.audit_warning = None;
     }
 
     /// Attach the list of ISOs that iso-parser couldn't extract boot
@@ -1870,6 +1897,52 @@ mod tests {
         s.cancel_verify();
         assert!(matches!(s.screen, Screen::Confirm { selected: 0 }));
         assert_eq!(s.isos[0].hash_verification, original);
+    }
+
+    /// #602: a fresh `AppState` has no audit warning. Set + clear are
+    /// the two mutators `main.rs` uses; both must round-trip.
+    #[test]
+    fn audit_warning_default_none_and_set_clear_round_trip() {
+        let mut s = AppState::new(vec![fake_iso("a")]);
+        assert!(s.audit_warning.is_none());
+
+        s.set_audit_warning("audit log write failed (disk full) — verdict shown but not persisted");
+        assert_eq!(
+            s.audit_warning.as_deref(),
+            Some("audit log write failed (disk full) — verdict shown but not persisted")
+        );
+
+        s.clear_audit_warning();
+        assert!(s.audit_warning.is_none());
+    }
+
+    /// #602: the audit warning must NOT affect the kexec gate. A green
+    /// ISO with a stale audit failure banner can still kexec — the
+    /// banner is informational, not a block.
+    #[test]
+    fn audit_warning_does_not_affect_kexec_gate() {
+        let mut s = AppState::new(vec![fake_iso("clean")]);
+        assert!(!s.is_kexec_blocked(0));
+
+        s.set_audit_warning("audit log write failed (read-only fs)");
+        assert!(
+            !s.is_kexec_blocked(0),
+            "audit warning is informational and must not gate kexec"
+        );
+    }
+
+    /// #602: a successful verify-now after a prior failure clears the
+    /// warning — the new JSONL line supersedes the missing one, so the
+    /// banner would be stale. `main.rs` calls `clear_audit_warning()`
+    /// on the Ok branch of `save_verify_audit_log`.
+    #[test]
+    fn audit_warning_cleared_after_successful_save() {
+        let mut s = AppState::new(vec![fake_iso("a")]);
+        s.set_audit_warning("audit log write failed (transient)");
+        // Simulate a subsequent successful save by calling the same
+        // method main.rs invokes on the Ok branch.
+        s.clear_audit_warning();
+        assert!(s.audit_warning.is_none());
     }
 
     #[test]
