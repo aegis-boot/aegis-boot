@@ -1263,6 +1263,21 @@ fn draw_confirm(frame: &mut Frame<'_>, area: Rect, state: &AppState, selected: u
     // from the ISO's own boot menu. One visual warning line — no
     // extra typed challenge.
     let mut lines: Vec<Line> = vec![verdict_line];
+    // #602: audit-log write failure banner. Non-blocking — the verdict
+    // and kexec-gate are unaffected; this just signals "the JSONL
+    // proof for this verify did not persist," letting the operator
+    // factor that into the boot-or-recheck decision.
+    if let Some(msg) = state.audit_warning.as_deref() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Audit:    ",
+                Style::default()
+                    .fg(state.theme.warning)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(msg, Style::default().fg(state.theme.warning)),
+        ]));
+    }
     if iso.contains_installer {
         lines.push(Line::from(vec![
             Span::styled(
