@@ -12,7 +12,7 @@ use ratatui::{
 };
 
 use crate::keybindings::{self, ScreenKind};
-use crate::state::{AppState, Pane, Screen, SecureBootStatus, quirks_summary};
+use crate::state::{AppState, ConsentKind, Pane, Screen, SecureBootStatus, quirks_summary};
 use crate::theme::Theme;
 use crate::verdict::TrustVerdict;
 
@@ -57,6 +57,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &AppState) {
     if let Screen::BlockedToast { message, .. } = &state.screen {
         draw_blocked_toast_overlay(frame, area, state, message);
     }
+    if let Screen::Consent { kind, .. } = &state.screen {
+        draw_consent_overlay(frame, area, state, *kind);
+    }
 }
 
 fn draw_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
@@ -68,7 +71,14 @@ fn draw_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     };
     match effective {
         Screen::List { selected } => draw_list(frame, area, state, *selected),
-        Screen::Confirm { selected } => draw_confirm(frame, area, state, *selected),
+        // Confirm + Consent share the same backdrop: Consent (#347)
+        // renders the Confirm screen underneath at the selected ISO so
+        // the operator sees verdict context, then the consent overlay
+        // paints on top via the overlay pass below (parallel to the
+        // BlockedToast pattern).
+        Screen::Confirm { selected } | Screen::Consent { selected, .. } => {
+            draw_confirm(frame, area, state, *selected);
+        }
         Screen::EditCmdline {
             selected,
             buffer,
@@ -532,6 +542,58 @@ fn draw_blocked_toast_overlay(frame: &mut Frame<'_>, area: Rect, state: &AppStat
         )),
     ];
     let block = Block::default().borders(Borders::ALL).title(" Blocked ");
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        panel,
+    );
+}
+
+/// Centered consent-prompt overlay (#347). Renders the Confirm screen
+/// underneath at the selected ISO so the operator sees the verdict
+/// context they're consenting against, then layers the prompt on top.
+/// Visually distinct from `BlockedToast` (warning-tinted border + a
+/// `[ Consent required ]` title) so the operator reads it as
+/// "decision needed" rather than "boot refused."
+fn draw_consent_overlay(frame: &mut Frame<'_>, area: Rect, state: &AppState, kind: ConsentKind) {
+    use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+
+    let prose = kind.prose();
+    let title = kind.title();
+    // Width: hug the longest line; cap so wide messages still land in
+    // the centered panel rather than spilling to the framebuffer edges.
+    let content_width = prose
+        .iter()
+        .copied()
+        .chain(std::iter::once(title))
+        .map(str::len)
+        .max()
+        .unwrap_or(40);
+    let w = u16::try_from(content_width.saturating_add(4))
+        .unwrap_or(u16::MAX)
+        .min(area.width)
+        .min(72);
+    // Height: prose lines + 2 (top/bottom border) + 2 (top spacer + footer).
+    let h = u16::try_from(prose.len().saturating_add(4))
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let panel = Rect::new(x, y, w, h);
+
+    let mut lines: Vec<Line<'_>> = Vec::with_capacity(prose.len().saturating_add(2));
+    lines.push(Line::from(""));
+    for body_line in prose {
+        lines.push(Line::from(Span::styled(
+            *body_line,
+            Style::default().fg(state.theme.warning),
+        )));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {title} "));
     frame.render_widget(
         Paragraph::new(lines)
             .block(block)

@@ -11,7 +11,7 @@
 
 // All modules now live in lib.rs so sibling binaries like
 // tiers-docgen (#462) can share them. main.rs is a thin driver.
-use rescue_tui::{failure_log, persistence, render, state, theme, tpm};
+use rescue_tui::{failure_log, persistence, render, state, theme, tier_b_log, tpm};
 
 use std::env;
 use std::io;
@@ -66,6 +66,39 @@ fn tracing_subscriber_init() {
             .with_writer(io::stderr)
             .with_env_filter(filter)
             .try_init();
+    }
+}
+
+/// Persist a Tier B parse-failure log (#347 Phase 3b). Best-effort —
+/// writes to `/run/media/aegis-isos` first (the live `AEGIS_ISOS`
+/// mount), falls back to `/tmp/aegis-tier-b-log` if that's not
+/// writable. Never blocks rescue-tui startup; tracing carries the
+/// diagnostic if every base fails. Lifted out of `run()` so that fn
+/// stays under clippy's 100-line cap.
+fn persist_tier_b_log(failed: &[iso_probe::FailedIso]) {
+    if failed.is_empty() {
+        return;
+    }
+    for base in ["/run/media/aegis-isos", "/tmp/aegis-tier-b-log"] {
+        let dir = std::path::Path::new(base);
+        match tier_b_log::write_failure_log(failed, dir) {
+            Ok(Some(path)) => {
+                tracing::info!(
+                    path = %path.display(),
+                    count = failed.len(),
+                    "tier-b: parse-failure log written"
+                );
+                return;
+            }
+            Ok(None) => return, // empty list, guarded above; defensive
+            Err(e) => {
+                tracing::debug!(
+                    base = base,
+                    error = %e,
+                    "tier-b: write attempt failed; trying next base"
+                );
+            }
+        }
     }
 }
 
@@ -158,6 +191,7 @@ fn run(roots: &[PathBuf]) -> Result<u8, Box<dyn std::error::Error>> {
     }
     let counted_but_not_attempted = on_disk_iso_count.saturating_sub(isos.len() + failed.len());
     let skipped = failed.len() + counted_but_not_attempted;
+    persist_tier_b_log(&failed);
     // Startup banner to stderr — mirrored via tracing::info! so structured
     // consumers (journald, CI smoke greps) see the same signal as humans
     // reading the serial console directly.
@@ -555,12 +589,42 @@ where
                         "rescue-tui: refused kexec — ISO is kexec-blocked (quirk or verification failure)"
                     );
                     state.record_kexec_error(&kexec_loader::KexecError::UnsupportedImage);
+                } else if let Some(kind) = state.consent_required_for(idx) {
+                    // #347: elevated-risk path requires per-session
+                    // consent before kexec proceeds. Once granted, the
+                    // session_consent flag short-circuits this branch
+                    // and subsequent boots flow through normally.
+                    state.enter_consent(kind, idx);
                 } else if state.is_degraded_trust(idx) {
                     // #93: YELLOW/GRAY verdict → require typing "boot".
                     state.enter_trust_challenge(idx);
                 } else {
                     attempt_kexec(state, idx);
                 }
+            }
+
+            // #347 consent-screen handlers. 'y' grants for the session;
+            // Esc cancels back to Confirm. The ConsentKind drives what
+            // happens after grant: install-warning consent flows into
+            // the normal kexec dispatch (re-entering the Confirm Enter
+            // path with session_consent set short-circuits the consent
+            // gate); tier-4 force-boot would attempt a kexec that fails
+            // with a clearer error than the current silent BlockedToast.
+            (Screen::Consent { .. }, KeyCode::Char('y' | 'Y')) => {
+                if let Some(idx) = state.grant_consent() {
+                    // After grant: re-evaluate the gate chain for `idx`.
+                    // The consent flag is now sticky for the session, so
+                    // the consent gate won't fire again; falls through
+                    // to trust-challenge or kexec as appropriate.
+                    if state.is_degraded_trust(idx) {
+                        state.enter_trust_challenge(idx);
+                    } else {
+                        attempt_kexec(state, idx);
+                    }
+                }
+            }
+            (Screen::Consent { .. }, KeyCode::Esc) => {
+                state.cancel_consent();
             }
 
             // Trust challenge (#93): Enter only fires kexec if the

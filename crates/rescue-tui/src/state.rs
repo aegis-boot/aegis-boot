@@ -98,6 +98,82 @@ pub enum Screen {
         /// returns to the same row they tried.
         return_to: usize,
     },
+    /// Consent screen — operator must explicitly acknowledge an
+    /// elevated-risk boot path before the kexec proceeds. Per-session
+    /// (`AppState::session_consent`): once granted, subsequent boots
+    /// in the same session skip this screen. (#347 — Phase 3b of #342.)
+    Consent {
+        /// What the operator is being asked to consent to. Drives the
+        /// rendered prose + the post-grant routing.
+        kind: ConsentKind,
+        /// Which Confirm-screen ISO to return to after consent
+        /// (granted → kexec; dismissed → Confirm).
+        selected: usize,
+    },
+}
+
+/// Reason for a [`Screen::Consent`] prompt. Each variant pairs with a
+/// specific operator decision the system needs explicit ack for. The
+/// shipped policy is *allow boot of any media but maintain the chain
+/// of trust as opt-in for high security* — the consent screen is the
+/// hinge where the operator opts down from "trusted only" to "any
+/// media." (#347 maintainer alignment.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsentKind {
+    /// The selected ISO carries an installer that can erase disks on
+    /// the host machine if the operator picks the wrong target inside
+    /// the ISO's own boot menu. Triggered by [`DiscoveredIso`]'s
+    /// `contains_installer` flag (#131). The Confirm screen renders an
+    /// inline warning today; consent is the second-step gate before
+    /// kexec proceeds.
+    InstallerCanEraseDisks,
+    /// The selected entry is a parse-failed (tier-4) ISO and the
+    /// operator wants to attempt boot anyway. Currently a no-op
+    /// because iso-parser couldn't extract a kernel/initrd, but
+    /// recording the consent makes the eventual kernel-extraction
+    /// failure path's diagnostic clearer ("force-boot consented but
+    /// no kernel found in this ISO").
+    Tier4ForceBoot,
+}
+
+impl ConsentKind {
+    /// Short imperative title for the consent-screen header.
+    #[must_use]
+    pub fn title(&self) -> &'static str {
+        match self {
+            Self::InstallerCanEraseDisks => "Confirm: installer can erase disks",
+            Self::Tier4ForceBoot => "Confirm: force boot of unparsable ISO",
+        }
+    }
+
+    /// Multi-line operator-facing prose describing what consent means
+    /// for this kind. Returned as a `Vec<&'static str>` so the
+    /// renderer can wrap to terminal width without re-parsing.
+    #[must_use]
+    pub fn prose(&self) -> &'static [&'static str] {
+        match self {
+            Self::InstallerCanEraseDisks => &[
+                "This ISO contains an OS installer.",
+                "If the ISO's own boot menu defaults to 'Install',",
+                "DISKS ON THIS MACHINE MAY BE ERASED — including",
+                "the aegis-boot stick itself, if you pick it as a target.",
+                "",
+                "Press 'y' to grant consent for the rest of this rescue session.",
+                "Press Esc to return to the Confirm screen and pick differently.",
+            ],
+            Self::Tier4ForceBoot => &[
+                "This ISO failed to parse — iso-parser could not extract",
+                "a kernel + initrd from its layout.",
+                "",
+                "Force-boot will attempt the kexec anyway, but is expected",
+                "to fail with a clear error explaining what's missing.",
+                "Useful for diagnosing parser-vs-distro disagreement.",
+                "",
+                "Press 'y' to grant force-boot consent for the rest of this session.",
+                "Press Esc to return to the list.",
+            ],
+        }
+    }
 }
 
 /// Top-level application state.
@@ -171,6 +247,15 @@ pub struct AppState {
     /// verify succeeds, since the new line replaces the missing one.
     /// (#602)
     pub audit_warning: Option<String>,
+    /// Per-session consent flag (#347). When true, the operator has
+    /// explicitly acknowledged at least one elevated-risk boot path
+    /// (installer-can-erase, tier-4 force-boot) and subsequent boots
+    /// in the same session skip the [`Screen::Consent`] gate. Resets
+    /// to false on every rescue-tui startup — boot-decisions made by
+    /// last week's operator do not carry forward to today's. The flag
+    /// is inspected at the Confirm-screen Enter handler before
+    /// dispatching to [`Self::is_kexec_blocked`] / kexec.
+    pub session_consent: bool,
 }
 
 /// Sort order applied to the List view. Cycled with the `s` key.
@@ -388,7 +473,59 @@ impl AppState {
             pane: Pane::default(),
             info_scroll: 0,
             audit_warning: None,
+            session_consent: false,
         }
+    }
+
+    /// Open the [`Screen::Consent`] screen for the given consent kind
+    /// against the given Confirm-screen ISO. Called from the Confirm
+    /// Enter handler when consent is required AND not yet granted in
+    /// this session. (#347)
+    pub fn enter_consent(&mut self, kind: ConsentKind, selected: usize) {
+        self.screen = Screen::Consent { kind, selected };
+    }
+
+    /// Grant consent for the current session. Returns the `selected`
+    /// index from the consent screen so the caller can chain into the
+    /// Confirm-screen path the operator was originally trying to
+    /// reach. Resets the screen to Confirm; subsequent kexec attempts
+    /// in the same session no longer hit the consent screen. (#347)
+    pub fn grant_consent(&mut self) -> Option<usize> {
+        if let Screen::Consent { selected, .. } = self.screen {
+            self.session_consent = true;
+            self.screen = Screen::Confirm { selected };
+            Some(selected)
+        } else {
+            None
+        }
+    }
+
+    /// Cancel a pending consent prompt without granting. Returns the
+    /// operator to the Confirm screen for the same ISO without
+    /// persisting consent. (#347)
+    pub fn cancel_consent(&mut self) {
+        if let Screen::Consent { selected, .. } = self.screen {
+            self.screen = Screen::Confirm { selected };
+        }
+    }
+
+    /// Whether the Confirm-screen Enter path needs to detour through
+    /// the consent screen for the given ISO. Returns `Some(kind)` if
+    /// a consent prompt is required for some reason, `None` if the
+    /// path can proceed straight to the existing kexec / trust
+    /// challenge flow. Caller is `main.rs`'s Confirm-Enter handler.
+    /// (#347)
+    #[must_use]
+    pub fn consent_required_for(&self, iso_idx: usize) -> Option<ConsentKind> {
+        // Per-session: if consent already granted, no further prompts.
+        if self.session_consent {
+            return None;
+        }
+        let iso = self.isos.get(iso_idx)?;
+        if iso.contains_installer {
+            return Some(ConsentKind::InstallerCanEraseDisks);
+        }
+        None
     }
 
     /// Set the non-blocking audit-log warning banner shown on the Confirm
@@ -1928,6 +2065,121 @@ mod tests {
         assert!(
             !s.is_kexec_blocked(0),
             "audit warning is informational and must not gate kexec"
+        );
+    }
+
+    // ---- #347 consent screen + per-session consent ---------------------
+
+    fn fake_iso_with_installer_flag(name: &str, contains_installer: bool) -> DiscoveredIso {
+        let mut iso = fake_iso(name);
+        iso.contains_installer = contains_installer;
+        iso
+    }
+
+    /// #347: clean ISO (no installer warning, no quirks) needs no
+    /// consent screen. The Confirm-Enter handler proceeds straight to
+    /// the trust-challenge / kexec dispatch chain.
+    #[test]
+    fn consent_not_required_for_clean_iso() {
+        let s = AppState::new(vec![fake_iso("clean")]);
+        assert!(
+            s.consent_required_for(0).is_none(),
+            "no consent for clean ISO"
+        );
+    }
+
+    /// #347: an ISO carrying an installer (#131 `contains_installer`
+    /// flag) requires consent before kexec can proceed — that's the
+    /// "installer can erase disks" gate.
+    #[test]
+    fn consent_required_for_installer_iso_pre_grant() {
+        let s = AppState::new(vec![fake_iso_with_installer_flag("ubuntu-server", true)]);
+        let Some(kind) = s.consent_required_for(0) else {
+            panic!("installer ISO must require consent");
+        };
+        assert_eq!(kind, ConsentKind::InstallerCanEraseDisks);
+    }
+
+    /// #347: per-session consent — once granted, subsequent
+    /// installer-ISO selections in the same session do NOT re-trigger
+    /// the consent gate. Resets on rescue-tui restart.
+    #[test]
+    fn consent_required_returns_none_after_session_grant() {
+        let mut s = AppState::new(vec![fake_iso_with_installer_flag("ubuntu-server", true)]);
+        s.session_consent = true;
+        assert!(
+            s.consent_required_for(0).is_none(),
+            "session_consent should short-circuit the gate"
+        );
+    }
+
+    /// #347: `enter_consent` transitions to `Screen::Consent` carrying
+    /// the kind + the selected-ISO index for return-routing.
+    #[test]
+    fn enter_consent_transitions_to_consent_screen() {
+        let mut s = AppState::new(vec![fake_iso("a")]);
+        s.enter_consent(ConsentKind::InstallerCanEraseDisks, 0);
+        match s.screen {
+            Screen::Consent { kind, selected } => {
+                assert_eq!(kind, ConsentKind::InstallerCanEraseDisks);
+                assert_eq!(selected, 0);
+            }
+            other => panic!("expected Screen::Consent, got {other:?}"),
+        }
+    }
+
+    /// #347: `grant_consent` flips `session_consent` and routes back
+    /// to the Confirm screen for the same ISO. Returns `Some(idx)` so
+    /// the main-loop handler can chain into kexec dispatch.
+    #[test]
+    fn grant_consent_sets_session_flag_and_routes_to_confirm() {
+        let mut s = AppState::new(vec![fake_iso("a")]);
+        s.enter_consent(ConsentKind::InstallerCanEraseDisks, 0);
+        let Some(idx) = s.grant_consent() else {
+            panic!("consent grant returns the idx");
+        };
+        assert_eq!(idx, 0);
+        assert!(s.session_consent, "consent must persist for the session");
+        assert!(matches!(s.screen, Screen::Confirm { selected: 0 }));
+    }
+
+    /// #347: `cancel_consent` returns to Confirm WITHOUT setting the
+    /// `session_consent` flag — operator declined.
+    #[test]
+    fn cancel_consent_does_not_persist_grant() {
+        let mut s = AppState::new(vec![fake_iso("a")]);
+        s.enter_consent(ConsentKind::InstallerCanEraseDisks, 0);
+        s.cancel_consent();
+        assert!(matches!(s.screen, Screen::Confirm { selected: 0 }));
+        assert!(!s.session_consent, "cancel must NOT persist consent");
+    }
+
+    /// #347: `grant_consent` on a non-Consent screen is a no-op
+    /// (returns `None`) so a stray keypress can't toggle
+    /// `session_consent` from elsewhere in the state machine.
+    #[test]
+    fn grant_consent_noop_when_not_on_consent_screen() {
+        let mut s = AppState::new(vec![fake_iso("a")]);
+        // screen is List by default; calling grant_consent should
+        // return None and leave session_consent untouched.
+        assert!(s.grant_consent().is_none());
+        assert!(!s.session_consent);
+    }
+
+    /// #347: the consent flag does NOT bypass the kexec-blocked gate.
+    /// Granting consent on a Windows ISO (`NotKexecBootable`) does not
+    /// allow kexec to proceed — the security invariant from #602/#558
+    /// (`Quirk::NotKexecBootable` always blocks) stays in force.
+    #[test]
+    fn consent_does_not_bypass_kexec_block() {
+        let mut iso = fake_iso("windows.iso");
+        iso.quirks = vec![Quirk::NotKexecBootable];
+        iso.contains_installer = true;
+        let mut s = AppState::new(vec![iso]);
+        s.session_consent = true;
+        assert!(
+            s.is_kexec_blocked(0),
+            "NotKexecBootable wins over session_consent"
         );
     }
 
