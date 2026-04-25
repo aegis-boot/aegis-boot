@@ -47,6 +47,8 @@ pub(crate) enum ScreenKind {
     ConfirmQuit,
     /// Quitting (terminal state; no bindings).
     Quitting,
+    /// "Cannot boot" toast over a tier-4 row. (#546)
+    BlockedToast,
 }
 
 impl ScreenKind {
@@ -63,6 +65,7 @@ impl ScreenKind {
             Screen::Help { .. } => Self::Help,
             Screen::ConfirmQuit { .. } => Self::ConfirmQuit,
             Screen::Quitting => Self::Quitting,
+            Screen::BlockedToast { .. } => Self::BlockedToast,
         }
     }
 }

@@ -54,6 +54,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &AppState) {
     if let Screen::ConfirmQuit { .. } = &state.screen {
         draw_confirm_quit_overlay(frame, area, state);
     }
+    if let Screen::BlockedToast { message, .. } = &state.screen {
+        draw_blocked_toast_overlay(frame, area, state, message);
+    }
 }
 
 fn draw_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
@@ -85,6 +88,9 @@ fn draw_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         Screen::TrustChallenge { selected, buffer } => {
             draw_trust_challenge(frame, area, state, *selected, buffer);
         }
+        // BlockedToast (#546) renders the List underneath at return_to,
+        // then the toast popup paints on top via the overlay pass.
+        Screen::BlockedToast { return_to, .. } => draw_list(frame, area, state, *return_to),
         Screen::Quitting | Screen::Help { .. } | Screen::ConfirmQuit { .. } => {}
     }
 }
@@ -486,6 +492,46 @@ fn draw_confirm_quit_overlay(frame: &mut Frame<'_>, area: Rect, state: &AppState
         )),
     ];
     let block = Block::default().borders(Borders::ALL).title(" Confirm ");
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        panel,
+    );
+}
+
+/// Centered popup overlay for [`Screen::BlockedToast`] (#546). Two-line
+/// payload — the message itself plus a "press any key" dismiss hint —
+/// rendered with an error-tinted border so the operator immediately
+/// reads "this is a refusal, not a confirmation prompt." Sized to the
+/// max message width so long parse-failed reasons don't wrap awkwardly.
+fn draw_blocked_toast_overlay(frame: &mut Frame<'_>, area: Rect, state: &AppState, message: &str) {
+    // Width: hug the message, but cap to avoid edge-of-screen panels.
+    // Account for the "press any key to dismiss" hint as the floor.
+    const DISMISS_HINT: &str = "press any key to dismiss";
+    let content_width = message.len().max(DISMISS_HINT.len());
+    let w = u16::try_from(content_width.saturating_add(4))
+        .unwrap_or(u16::MAX)
+        .min(area.width)
+        .min(70);
+    let h: u16 = 5;
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let panel = Rect::new(x, y, w, h);
+    let lines = vec![
+        Line::from(Span::styled(
+            message.to_string(),
+            Style::default()
+                .fg(state.theme.error)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            DISMISS_HINT,
+            Style::default().fg(state.theme.warning),
+        )),
+    ];
+    let block = Block::default().borders(Borders::ALL).title(" Blocked ");
     frame.render_widget(
         Paragraph::new(lines)
             .block(block)
