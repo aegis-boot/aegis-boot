@@ -1229,6 +1229,38 @@ pub fn error_diagnostic_with_iso(
             "Kernel image format not recognized".to_string(),
             Some("The ISO's kernel is not a valid bzImage; this ISO is not supported.".to_string()),
         ),
+        KexecError::AlreadyLoaded => (
+            "Another kexec image is already loaded".to_string(),
+            Some(
+                "Another kexec image is staged in this kernel. Run `kexec -u` to unload, \
+                 or reboot the rescue stick fresh before retrying."
+                    .to_string(),
+            ),
+        ),
+        KexecError::ImageTooLarge => (
+            "Kernel image too large for kexec".to_string(),
+            Some(
+                "The ISO's kernel exceeds the kexec_file_load size limit. Try a smaller \
+                 kernel variant (e.g. non-debug, non-bigmem build) on the same ISO."
+                    .to_string(),
+            ),
+        ),
+        KexecError::PermissionDenied => (
+            "Permission denied opening kernel or initrd".to_string(),
+            Some(
+                "The operator could not read the kernel or initrd file. Check the ISO is \
+                 mounted and the rescue process has read access."
+                    .to_string(),
+            ),
+        ),
+        KexecError::OutOfMemory => (
+            "Not enough memory to stage the kexec image".to_string(),
+            Some(
+                "The kernel could not allocate enough memory to load this image. Reboot \
+                 to a fresh rescue state and try again."
+                    .to_string(),
+            ),
+        ),
         KexecError::Io(io) => (
             format!("System error: {io}"),
             io.raw_os_error()

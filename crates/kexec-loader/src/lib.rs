@@ -79,6 +79,38 @@ pub enum KexecError {
     #[error("kernel image format not recognized (kexec_file_load returned ENOEXEC)")]
     UnsupportedImage,
 
+    /// Another kexec image is already loaded; the kernel refuses to load a
+    /// second one until the first is released. Maps to `EBUSY`. User remedy:
+    /// `kexec -u` (unload), or reboot.
+    #[error(
+        "another kexec image is already loaded (EBUSY); run `kexec -u` to unload, or reboot first"
+    )]
+    AlreadyLoaded,
+
+    /// Image (kernel or initrd) exceeds the kernel's `kexec_file_load`
+    /// size limit. Maps to `EFBIG`. User remedy: pick a smaller kernel
+    /// variant (e.g. non-debug, non-bigmem) or extend `crashkernel=` if
+    /// that's the bound being hit.
+    #[error("kernel image is too large for kexec_file_load (EFBIG); try a smaller kernel variant")]
+    ImageTooLarge,
+
+    /// Path-level permission denied opening the kernel or initrd. Distinct
+    /// from [`KexecError::LockdownRefused`] — that's the kernel refusing
+    /// the syscall under lockdown; this is regular file-permission failure
+    /// before the syscall is even issued. Maps to `EACCES`.
+    #[error(
+        "permission denied opening kernel or initrd file (EACCES); check the operator has read access"
+    )]
+    PermissionDenied,
+
+    /// Kernel could not allocate enough memory to stage the new image.
+    /// Maps to `ENOMEM`. User remedy: free memory or reboot to a fresh
+    /// state. The rescue initramfs shouldn't normally have memory
+    /// pressure, so this typically points at a bzImage that decompresses
+    /// far larger than its packed size suggests.
+    #[error("not enough memory to stage the kexec image (ENOMEM); free memory or reboot")]
+    OutOfMemory,
+
     /// Underlying I/O or file-descriptor failure.
     #[error("io error: {0}")]
     Io(#[from] io::Error),
@@ -232,6 +264,10 @@ pub fn classify_errno(errno: i32) -> KexecError {
         libc::EKEYREJECTED => KexecError::SignatureRejected,
         libc::EPERM => KexecError::LockdownRefused,
         libc::ENOEXEC => KexecError::UnsupportedImage,
+        libc::EBUSY => KexecError::AlreadyLoaded,
+        libc::EFBIG => KexecError::ImageTooLarge,
+        libc::EACCES => KexecError::PermissionDenied,
+        libc::ENOMEM => KexecError::OutOfMemory,
         other => KexecError::Io(io::Error::from_raw_os_error(other)),
     }
 }
@@ -271,6 +307,58 @@ mod tests {
             panic!("expected Io variant");
         };
         assert_eq!(io_err.raw_os_error(), Some(libc::ENOENT));
+    }
+
+    #[test]
+    fn classify_already_loaded() {
+        assert!(matches!(
+            classify_errno(libc::EBUSY),
+            KexecError::AlreadyLoaded
+        ));
+    }
+
+    #[test]
+    fn classify_image_too_large() {
+        assert!(matches!(
+            classify_errno(libc::EFBIG),
+            KexecError::ImageTooLarge
+        ));
+    }
+
+    #[test]
+    fn classify_permission_denied() {
+        assert!(matches!(
+            classify_errno(libc::EACCES),
+            KexecError::PermissionDenied
+        ));
+    }
+
+    #[test]
+    fn classify_out_of_memory() {
+        assert!(matches!(
+            classify_errno(libc::ENOMEM),
+            KexecError::OutOfMemory
+        ));
+    }
+
+    /// Each typed variant must carry an actionable hint in its Display.
+    /// rescue-tui's error frame shows the message verbatim, so empty or
+    /// generic strings are a regression on operator UX. #599.
+    #[test]
+    fn each_typed_variant_has_actionable_message() {
+        for (errno, needle) in [
+            (libc::EBUSY, "kexec -u"),
+            (libc::EFBIG, "smaller"),
+            (libc::EACCES, "permission"),
+            (libc::ENOMEM, "memory"),
+        ] {
+            let err = classify_errno(errno);
+            let msg = err.to_string();
+            assert!(
+                msg.to_lowercase().contains(needle),
+                "errno {errno}: message {msg:?} should mention {needle:?}"
+            );
+        }
     }
 
     #[test]
