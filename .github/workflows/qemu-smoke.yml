@@ -1,10 +1,13 @@
 name: QEMU Smoke Boot
 
 on:
+  # #580 Phase 1: skip on docs-only PRs. See kexec-e2e.yml for rationale.
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**', '.github/ISSUE_TEMPLATE/**', 'LICENSE*']
   pull_request:
     branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**', '.github/ISSUE_TEMPLATE/**', 'LICENSE*']
   workflow_dispatch:
 
 jobs:

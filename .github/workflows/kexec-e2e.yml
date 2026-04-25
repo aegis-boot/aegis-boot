@@ -1,10 +1,28 @@
 name: kexec E2E
 
 on:
+  # #580 Phase 1: skip on docs-only PRs. The 6 E2E workflows (kexec,
+  # ovmf-secboot, direct-install, mkusb, qemu-smoke, update-rotate) plus
+  # reproducible-build share this paths-ignore block. Markdown / docs /
+  # issue templates / LICENSE cannot break a QEMU boot flow, so burning
+  # ~5 CPU-min on each was pure waste (PR #572 burned ~25 CPU-min on a
+  # docs-only architecture-umbrella change). Branch protection on `main`
+  # is currently empty (see docs/governance/CI_REQUIRED_CHECKS.md), so
+  # plain paths-ignore is safe — no dummy-pass consolidation needed.
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - 'LICENSE*'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - 'LICENSE*'
   workflow_dispatch:
 
 # Proves the rescue-tui -> target-kernel kexec handoff works end-to-end.

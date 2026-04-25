@@ -1,10 +1,15 @@
 name: Reproducible Build Verification
 
 on:
+  # #580 Phase 1: skip on docs-only PRs. See kexec-e2e.yml for rationale.
+  # reproducible-build does two full builds (~2:13 each), making it the
+  # second-biggest CPU hog after the QEMU E2E suite — high-leverage skip.
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**', '.github/ISSUE_TEMPLATE/**', 'LICENSE*']
   pull_request:
     branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**', '.github/ISSUE_TEMPLATE/**', 'LICENSE*']
   workflow_dispatch:
 
 # Reproducibility is verified at the level we ship — the Rust release binaries
