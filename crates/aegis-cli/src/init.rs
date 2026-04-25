@@ -173,8 +173,9 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(code);
     }
 
-    for slug in profile.slugs {
-        if let Err(code) = fetch_and_add_step(slug, parsed.skip_gpg) {
+    let total = profile.slugs.len();
+    for (idx, slug) in profile.slugs.iter().enumerate() {
+        if let Err(code) = fetch_and_add_step(slug, parsed.skip_gpg, idx + 1, total) {
             return ExitCode::from(code);
         }
     }
@@ -232,9 +233,18 @@ fn flash_step(device: Option<&str>, assume_yes: bool, direct_install: bool) -> R
     })
 }
 
-fn fetch_and_add_step(slug: &str, skip_gpg: bool) -> Result<(), u8> {
+fn fetch_and_add_step(slug: &str, skip_gpg: bool, idx: usize, total: usize) -> Result<(), u8> {
     println!();
-    println!("--- {slug} ---");
+    // #547: per-file progress header. Operators on slow WiFi watching
+    // panic-room (~5 GB across multiple ISOs) couldn't tell whether
+    // the process was hung or just downloading the third ISO. The
+    // "fetch N/M: <slug> (<size>)" line answers "where am I in the
+    // batch and how big is the file" before curl's progress bar
+    // takes over the next ~minutes.
+    let size_hint = find_entry(slug)
+        .map(|e| format!(" (~{} MiB)", e.size_mib))
+        .unwrap_or_default();
+    println!("--- fetch {idx}/{total}: {slug}{size_hint} ---");
 
     let mut fetch_args: Vec<String> = Vec::new();
     if skip_gpg {
