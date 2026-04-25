@@ -997,6 +997,26 @@ impl<E: IsoEnvironment> IsoParser<E> {
                             "Kernel path escape",
                         ))
                     })?;
+                // Mirror the kernel-side strip_prefix so `BootEntry.initrd`
+                // matches the type's documented contract ("relative to ISO
+                // mount point"). #596: prior to this, the Arch/generic
+                // fallback left initrd absolute, leaking the loop-mount
+                // path through `BootEntry`'s serde derive.
+                let rel_initrd = if has_initrd {
+                    Some(
+                        initrd
+                            .strip_prefix(mount_point)
+                            .map(std::path::Path::to_path_buf)
+                            .map_err(|_| {
+                                IsoError::Io(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "Initrd path escape",
+                                ))
+                            })?,
+                    )
+                } else {
+                    None
+                };
                 let distribution = Distribution::from_paths(&rel_kernel);
                 let label = match distribution {
                     Distribution::Alpine => format!(
@@ -1026,7 +1046,7 @@ impl<E: IsoEnvironment> IsoParser<E> {
                 entries.push(BootEntry {
                     label,
                     kernel: rel_kernel,
-                    initrd: if has_initrd { Some(initrd) } else { None },
+                    initrd: rel_initrd,
                     kernel_args,
                     distribution,
                     source_iso: source_iso
@@ -1794,6 +1814,45 @@ mod tests {
             entries
                 .iter()
                 .any(|e| e.kernel.to_string_lossy().contains("vmlinuz"))
+        );
+    }
+
+    /// #596 regression: every layout must store `kernel` and `initrd`
+    /// relative to the ISO mount point, matching `BootEntry`'s documented
+    /// contract. Previously the Arch / generic-vmlinuz fallback skipped
+    /// the `strip_prefix` step on `initrd` only.
+    #[tokio::test]
+    async fn test_arch_initrd_path_is_relative_to_mount() {
+        let mock = MockIsoEnvironment::with_iso(Distribution::Arch);
+        let parser = IsoParser::new(mock);
+
+        let mount_base = PathBuf::from("/mock_mount");
+        let entries = parser
+            .extract_boot_entries(&mount_base, &PathBuf::from("test.iso"))
+            .await
+            .unwrap();
+
+        let arch = entries
+            .iter()
+            .find(|e| e.distribution == Distribution::Arch)
+            .expect("expected an Arch BootEntry from the Arch mock");
+
+        assert!(
+            arch.kernel.is_relative(),
+            "kernel path must be relative; got {:?}",
+            arch.kernel
+        );
+        let initrd = arch
+            .initrd
+            .as_ref()
+            .expect("Arch mock fixture provides an initrd");
+        assert!(
+            initrd.is_relative(),
+            "initrd path must be relative; got {initrd:?}"
+        );
+        assert!(
+            !initrd.starts_with(&mount_base),
+            "initrd must not retain the mount-point prefix; got {initrd:?}"
         );
     }
 
