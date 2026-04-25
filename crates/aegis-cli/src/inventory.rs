@@ -166,12 +166,24 @@ pub fn run_add(args: &[String]) -> ExitCode {
 // extracting helpers would fragment the control flow for no clarity win.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn try_run_add(args: &[String]) -> Result<(), u8> {
-    if args.is_empty()
-        || args.first().map(String::as_str) == Some("--help")
+    if args.first().map(String::as_str) == Some("--help")
         || args.first().map(String::as_str) == Some("-h")
     {
         print_add_help();
-        return if args.is_empty() { Err(2) } else { Ok(()) };
+        return Ok(());
+    }
+    if args.is_empty() {
+        // #540 — when invoked with no args, surface a missing-argument
+        // line on stderr BEFORE the help text. The pre-fix behavior
+        // dumped help with no context, which a first-time operator
+        // could mistake for a successful no-op. Mirrors the pattern
+        // `fetch` already uses.
+        eprintln!(
+            "aegis-boot add: missing required <iso-or-slug> argument.\n\
+             Try `aegis-boot add --help`, or pick a slug from `aegis-boot recommend`."
+        );
+        print_add_help();
+        return Err(2);
     }
 
     let AddArgs {
