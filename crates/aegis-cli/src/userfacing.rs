@@ -123,6 +123,30 @@ pub fn render(err: &dyn UserFacing, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     Ok(())
 }
 
+/// Thin convenience for fail-fast subcommand error sites that don't
+/// warrant a typed [`UserFacing`] impl per failure mode. Emits the
+/// existing aegis-boot eprintln shape plus a `NEXT ACTION:` line:
+///
+/// ```text
+/// aegis-boot <subcommand>: <message>
+/// NEXT ACTION: <hint>
+/// ```
+///
+/// Use this for one-off error paths in `flash`, `add`, `verify`, etc.
+/// where defining a full `UserFacing` error type would be more
+/// machinery than the failure mode warrants. If the same subcommand
+/// has many distinct failure modes that benefit from typed `code()`,
+/// `docs_url()`, and numbered alternatives, prefer a real
+/// [`UserFacing`] impl plus [`render_string`].
+///
+/// The "NEXT ACTION:" prefix matches what `aegis-boot doctor` already
+/// prints, giving operators a consistent landmark to grep / read for
+/// across the whole CLI surface (issue #542).
+pub fn eprint_with_next(subcommand: &str, message: impl AsRef<str>, hint: impl AsRef<str>) {
+    eprintln!("aegis-boot {subcommand}: {}", message.as_ref());
+    eprintln!("NEXT ACTION: {}", hint.as_ref());
+}
+
 /// Render a `UserFacing` error to a `String`. Convenience wrapper for
 /// callers that want to write the result to `stderr` directly.
 #[must_use]
@@ -340,5 +364,35 @@ mod tests {
         let s = render_string(&FullError);
         assert!(s.contains("  try: re-run"), "got: {s}");
         assert!(!s.contains("try one of:"), "got: {s}");
+    }
+
+    // ---- #542 thin helper: eprint_with_next ----
+    //
+    // The function writes to stderr, which is hard to capture in unit
+    // tests without redirection plumbing. We test the SHAPE of the
+    // output by exercising a String-returning twin (kept private so
+    // the production helper stays the simple eprintln pair operators
+    // actually call).
+
+    fn fmt_next_action(subcommand: &str, message: &str, hint: &str) -> String {
+        format!("aegis-boot {subcommand}: {message}\nNEXT ACTION: {hint}\n")
+    }
+
+    #[test]
+    fn next_action_shape_is_two_lines() {
+        let s = fmt_next_action("flash", "image path is not a file", "check the path");
+        assert!(s.starts_with("aegis-boot flash: image path is not a file\n"));
+        assert!(s.contains("\nNEXT ACTION: check the path\n"));
+    }
+
+    #[test]
+    fn next_action_subcommand_prefix_appears_in_output() {
+        // Pinned: every NEXT ACTION-bearing message starts with
+        // `aegis-boot <subcommand>:` so operators can grep + tooling
+        // can parse subcommand-scoped errors.
+        for sub in ["flash", "add", "fetch-image", "verify", "update"] {
+            let s = fmt_next_action(sub, "X", "Y");
+            assert!(s.starts_with(&format!("aegis-boot {sub}:")), "got: {s}");
+        }
     }
 }

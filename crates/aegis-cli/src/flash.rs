@@ -166,9 +166,10 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
     // Validate --image path up front so we fail before asking for confirmation.
     if let Some(path) = prebuilt_image.as_ref() {
         if !path.is_file() {
-            eprintln!(
-                "aegis-boot flash: --image path is not a file: {}",
-                path.display()
+            crate::userfacing::eprint_with_next(
+                "flash",
+                format!("--image path is not a file: {}", path.display()),
+                "check the path, or run `aegis-boot fetch-image` to download the pre-built signed .img",
             );
             return Err(1);
         }
@@ -540,7 +541,11 @@ fn select_drive(explicit: Option<&str>) -> Option<Drive> {
     if let Some(dev) = explicit {
         let path = PathBuf::from(dev);
         if !path.exists() {
-            eprintln!("device not found: {dev}");
+            crate::userfacing::eprint_with_next(
+                "flash",
+                format!("device not found: {dev}"),
+                "run `lsblk -d -o NAME,SIZE,MODEL,RM` (Linux) or `diskutil list` (macOS) to find your USB stick's identifier",
+            );
             return None;
         }
         // Build a minimal Drive for the explicit path.
@@ -568,9 +573,11 @@ fn select_drive(explicit: Option<&str>) -> Option<Drive> {
 
     let drives = detect::list_removable_drives();
     if drives.is_empty() {
-        eprintln!("No removable USB drives detected.");
-        eprintln!("Plug in a USB stick and try again, or specify a device:");
-        eprintln!("  aegis-boot flash /dev/sdX");
+        crate::userfacing::eprint_with_next(
+            "flash",
+            "no removable USB drives detected",
+            "plug in a USB stick and try again, or pass a device explicitly: `aegis-boot flash /dev/sdX`",
+        );
         return None;
     }
 
