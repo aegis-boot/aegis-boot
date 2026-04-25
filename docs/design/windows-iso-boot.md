@@ -167,7 +167,7 @@ The stick-layout change (+1.5 GiB) is disproportionate for a feature that confli
 Two lighter options, plus three marginal variants:
 
 - **L1 — "Helpful refusal + Linux redirect":** rescue-tui tier-5 panel for Win11 ISOs gets actionable prose naming three alternatives (try the Linux ISOs already on the stick, use L2's CLI for a standalone Windows stick, fall back to Rufus). ~30 LOC. Zero stick growth. Zero signed-chain impact.
-- **L2 — "Second-stick CLI":** `aegis-boot flash --windows-target <iso> <stick>` wipes a different stick and makes it a standard Rufus-style Win11 installer, reusing the `windows_direct_install::{partition,format,raw_write}` pipeline from [#419](https://github.com/aegis-boot/aegis-boot/issues/419). Zero aegis-boot stick growth; operator needs 2 sticks. ~150 LOC (mostly reuse).
+- **L2 — "Second-stick CLI"** [REJECTED — see [#513](https://github.com/aegis-boot/aegis-boot/pull/513)]: `aegis-boot flash --windows-target <iso> <stick>` would wipe a different stick and make it a standard Rufus-style Win11 installer, reusing the `windows_direct_install::{partition,format,raw_write}` pipeline from [#419](https://github.com/aegis-boot/aegis-boot/issues/419). Zero aegis-boot stick growth; operator needs 2 sticks. ~150 LOC (mostly reuse). **Dropped on second-round review:** Rufus already does this on Windows hosts; rebuilding it would duplicate a battle-tested tool with 100M+ installs.
 - **L3 — "Grow AEGIS_ESP to 1 GiB, chainload in-place":** +600 MiB growth (vs +1.5 GiB for Option D). Mixes Windows + aegis-boot bits on the same ESP — attestation complexity grows. ~400 LOC.
 - **L4 — "Detect-only, no boot path":** Leave the BOOT BLOCKED status as-is. <5 LOC.
 - **L5 — "PE32 kexec via Hudson's `safeboot-loader`":** Maintain a forked kernel with PE32 kexec patches. No stick-layout change. Ongoing ~1 dev-week per kernel-version tax.
@@ -236,20 +236,29 @@ The L1 + L2 combination addresses (1) and (2) by letting operators flash a secon
 
 The Option D implementation sketch below is retained for historical context. The L1 + L2 implementation sketch is in the epic tracking issue ([see References](#references)).
 
-## Implementation sketch for L1 + L2 (recommended)
+## Implementation sketch (final scope: L1 only, per #513)
 
-### L1 — rescue-tui prose panel (~30 LOC, 1 PR)
+### L1 — rescue-tui prose panel (~30 LOC, 1 PR) — SHIPPED in commit `da186e9`
 
-- [ ] iso-probe quirks: rename `Quirk::NotKexecBootable` → `Quirk::RequiresAlternatePath` (or add the new variant) so rescue-tui can distinguish "this ISO type just can't be booted" from "boot this some other way". Windows keeps the quirk but gets a different rendering.
-- [ ] rescue-tui tier-5 render: for `Distribution::Windows`, replace "BOOT BLOCKED" prose with an actionable 3-bullet panel:
-  1. "aegis-boot won't boot Windows ISOs — that's by design. Here are your options:"
-  2. "Try Linux: [list of Linux ISOs found on this stick, or a catalog-slug hint if none]"
-  3. "Make a dedicated Windows installer stick: `aegis-boot flash --windows-target {iso} {new-stick}`"
-  4. "Or: use Rufus (`aegis-boot` is not a Rufus replacement)"
-- [ ] Snapshot test in `rescue-tui` asserting the panel renders for a canned Win11 iso-probe fixture.
-- [ ] Mention in `docs/HOW_IT_WORKS.md § Supported ISOs`.
+Final shipped behavior (in `crates/rescue-tui/src/render.rs::windows_redirect_lines`,
+verified against `render_coverage_tier5_windows_blocked` test):
 
-### L2 — `aegis-boot flash --windows-target` (~150 LOC, 1-2 PRs)
+- For `Distribution::Windows`, the Confirm screen renders a Rufus-redirect panel (not the generic "BOOT BLOCKED"):
+  ```
+  Windows 11 installer detected — aegis-boot doesn't boot Windows by design.
+
+  To install Windows 11, use Rufus:
+    1. Copy your Win11 ISO off this stick
+    2. Get Rufus from https://rufus.ie
+    3. Flash the ISO to a different USB stick
+  ```
+- A "To try Linux instead" section enumerates the bootable Linux ISOs already on the stick (or a catalog-slug hint if none are present).
+- The `Quirk::NotKexecBootable` gate in `iso-probe` and the three `is_kexec_blocked()` checks in `rescue-tui/src/main.rs` (lines 552, 805, 854) remain unchanged — the panel is informational, not a gate.
+- Snapshot coverage: `render_coverage_tier5_windows_blocked` + `render_coverage_tier5_windows_lists_bootable_linux_isos` + `render_coverage_tier5_windows_fallback_when_no_linux_isos`.
+
+> **NOT PURSUED — preserved as decision record per [PR #513](https://github.com/aegis-boot/aegis-boot/pull/513)** (anti-sprawl: Rufus already solves this). The original L1+L2 plan was rescoped to L1-only after a second round of maintainer review surfaced that L2 would reimplement Rufus. Sketch retained so future contributors can see the candidate that was evaluated and rejected, instead of re-proposing it.
+
+### ~~L2 — `aegis-boot flash --windows-target`~~ (~150 LOC, 1-2 PRs) — REJECTED (#513)
 
 - [ ] New CLI arg `--windows-target <stick>` on `aegis-boot flash`, mutually exclusive with `--direct-install` (aegis-boot flow) and `--image` (pre-built image flow).
 - [ ] New module `crates/aegis-cli/src/windows_target.rs` that:
