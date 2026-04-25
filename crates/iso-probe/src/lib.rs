@@ -38,7 +38,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub use iso_parser::{BootEntry, Distribution, IsoError, ScanFailure, ScanFailureKind, ScanReport};
+pub use iso_parser::{
+    BootEntry, BootEntryKind, Distribution, IsoError, ScanFailure, ScanFailureKind, ScanReport,
+};
 pub use minisign::{SignatureVerification, verify_iso_signature};
 pub use sidecar::{
     IsoSidecar, SidecarError, load_sidecar, sidecar_path_for, to_toml as sidecar_to_toml,

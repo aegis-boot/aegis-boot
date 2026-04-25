@@ -182,6 +182,70 @@ fn sanitize_reason(raw: &str) -> String {
     format!("{}…", &trimmed[..end])
 }
 
+/// Discriminator for the kind of boot entry. Today only [`Iso`] is
+/// implemented; the other variants are documented as **deferred**
+/// per the linked ADRs in `docs/adr/`.
+///
+/// This enum is intentionally a thin sibling of [`BootEntry`]: it
+/// reserves a place for future delivery types (netboot, iPXE
+/// chain, recovery + provisioning profiles) without disturbing the
+/// existing call sites that consume [`BootEntry`] directly.
+///
+/// Serialized with an internal `kind` tag (`{"kind": "iso", ...}`)
+/// so a future verifier or consumer can dispatch on type without
+/// inspecting payload shape. Variant names are snake_case on the
+/// wire.
+///
+/// **Reserved variants** (NOT implemented; do not match on these):
+///
+/// - `Netboot` — kernel + initrd + cmdline served over HTTP rather
+///   than from a mounted ISO. Deferred per
+///   [ADR 0003](../../../docs/adr/0003-defer-netboot-daemon.md).
+/// - `IpxeChain` — chain-load to an iPXE script reference. Deferred
+///   per [ADR 0003](../../../docs/adr/0003-defer-netboot-daemon.md).
+/// - `RecoveryProfile` — curated triage / evidence-collection stick
+///   layout. Deferred per
+///   [ADR 0005](../../../docs/adr/0005-defer-recovery-profiles-distinct-type.md).
+/// - `ProvisioningProfile` — declarative install (kickstart /
+///   autoinstall / cloud-init reference). Reserved as a sibling of
+///   `RecoveryProfile`; same ADR.
+///
+/// All four are intentionally NOT YET ADDED as enum variants. The
+/// shape is reserved here in the docstring so a future epic can
+/// extend the enum without re-architecting the boot-entry model.
+///
+/// [`Iso`]: BootEntryKind::Iso
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BootEntryKind {
+    /// An ISO-rooted boot entry. The single shape that exists
+    /// today; every existing [`BootEntry`] corresponds to this
+    /// variant. Boot is via `kexec_file_load(2)` against the
+    /// extracted kernel + initrd.
+    Iso(BootEntry),
+}
+
+impl BootEntryKind {
+    /// Convenience accessor: returns the inner [`BootEntry`] when
+    /// `self` is the `Iso` variant. Today this is total — every
+    /// `BootEntryKind` is `Iso`. Future variants will return
+    /// `None` here, and callers will need a richer match.
+    #[must_use]
+    pub fn as_iso(&self) -> Option<&BootEntry> {
+        match self {
+            BootEntryKind::Iso(e) => Some(e),
+        }
+    }
+
+    /// Convenience constructor for the only variant currently
+    /// implemented. Avoids forcing every call site to write
+    /// `BootEntryKind::Iso(...)` explicitly.
+    #[must_use]
+    pub fn iso(entry: BootEntry) -> Self {
+        BootEntryKind::Iso(entry)
+    }
+}
+
 /// Represents a discovered boot entry from an ISO
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BootEntry {
@@ -2241,5 +2305,77 @@ ID=ubuntu
             .await
             .expect_err("legacy wrapper must error when all failed");
         assert!(matches!(err, IsoError::NoBootEntries(_)));
+    }
+
+    // ---- M1A: BootEntryKind enum (#557, epic #556) -------------------------
+
+    fn sample_boot_entry() -> BootEntry {
+        BootEntry {
+            label: "Debian 12.7 amd64".to_string(),
+            kernel: PathBuf::from("/install.amd/vmlinuz"),
+            initrd: Some(PathBuf::from("/install.amd/initrd.gz")),
+            kernel_args: Some("boot=live".to_string()),
+            distribution: Distribution::Debian,
+            source_iso: "debian-12.7.0-amd64-netinst.iso".to_string(),
+            pretty_name: Some("Debian GNU/Linux 12 (bookworm)".to_string()),
+        }
+    }
+
+    #[test]
+    fn boot_entry_kind_iso_round_trips_json() {
+        // Serialize → deserialize → compare. Pins the wire shape so
+        // a future variant addition can't silently change the JSON
+        // payload of existing Iso entries.
+        let kind = BootEntryKind::iso(sample_boot_entry());
+        let body = serde_json::to_string(&kind).expect("serialize");
+        let parsed: BootEntryKind = serde_json::from_str(&body).expect("parse");
+        assert_eq!(kind, parsed);
+    }
+
+    #[test]
+    fn boot_entry_kind_serializes_with_internal_kind_tag() {
+        // The `#[serde(tag = "kind")]` discriminator is load-bearing
+        // for forward-compat: future Netboot / IpxeChain / etc.
+        // variants need a dispatch field. Pin its presence.
+        let kind = BootEntryKind::iso(sample_boot_entry());
+        let body = serde_json::to_string(&kind).expect("serialize");
+        assert!(
+            body.contains(r#""kind":"iso""#),
+            "expected internal `kind: \"iso\"` tag, got: {body}"
+        );
+    }
+
+    #[test]
+    fn boot_entry_kind_iso_constructor_round_trip() {
+        // The `iso()` convenience constructor must produce a value
+        // that's `Eq`-equivalent to constructing via `Iso(...)`.
+        let entry = sample_boot_entry();
+        let via_constructor = BootEntryKind::iso(entry.clone());
+        let via_explicit = BootEntryKind::Iso(entry);
+        assert_eq!(via_constructor, via_explicit);
+    }
+
+    #[test]
+    fn boot_entry_kind_as_iso_returns_inner_for_iso_variant() {
+        let entry = sample_boot_entry();
+        let kind = BootEntryKind::iso(entry.clone());
+        assert_eq!(kind.as_iso(), Some(&entry));
+    }
+
+    #[test]
+    fn boot_entry_kind_payload_preserves_existing_fields() {
+        // Wrapping a BootEntry in BootEntryKind::Iso(...) must not
+        // mutate any field. Regression guard for refactors that
+        // accidentally re-encode the inner shape.
+        let entry = sample_boot_entry();
+        let kind = BootEntryKind::iso(entry.clone());
+        let inner = kind.as_iso().expect("Iso variant");
+        assert_eq!(inner.label, entry.label);
+        assert_eq!(inner.kernel, entry.kernel);
+        assert_eq!(inner.initrd, entry.initrd);
+        assert_eq!(inner.kernel_args, entry.kernel_args);
+        assert_eq!(inner.distribution, entry.distribution);
+        assert_eq!(inner.source_iso, entry.source_iso);
+        assert_eq!(inner.pretty_name, entry.pretty_name);
     }
 }
