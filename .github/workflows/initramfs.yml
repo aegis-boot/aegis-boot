@@ -31,24 +31,29 @@ jobs:
       - name: Build rescue-tui (release)
         run: cargo build --release -p rescue-tui
 
-      - name: Build initramfs pass 1
+      # #616: parallelize the two reproducibility passes in-job rather
+      # than sequentially. Wall-clock drops from ~60s to ~30s; CPU-min
+      # stays unchanged (still doing 2× the work, just compressed in
+      # time). build-initramfs.sh uses `mktemp -d` for STAGE_DIR per
+      # invocation and OUT_DIR is already a per-call parameter, so two
+      # concurrent runs do not collide on filesystem state. We avoid
+      # splitting into separate jobs because each new job pays ~30-45s
+      # of setup overhead (apt + Rust install), which would net out to
+      # MORE CPU-min, the opposite of #580's goal.
+      - name: Build initramfs (passes 1 + 2 in parallel) + verify reproducibility
         env:
           SOURCE_DATE_EPOCH: "1700000000"
         run: |
-          OUT_DIR=out1 ./scripts/build-initramfs.sh
-          cp out1/initramfs.cpio.gz.sha256 pass1.sha256
-
-      - name: Build initramfs pass 2
-        env:
-          SOURCE_DATE_EPOCH: "1700000000"
-        run: |
-          OUT_DIR=out2 ./scripts/build-initramfs.sh
-          cp out2/initramfs.cpio.gz.sha256 pass2.sha256
-
-      - name: Verify reproducibility
-        run: |
-          p1=$(awk '{print $1}' pass1.sha256)
-          p2=$(awk '{print $1}' pass2.sha256)
+          OUT_DIR=out1 ./scripts/build-initramfs.sh &
+          PASS1_PID=$!
+          OUT_DIR=out2 ./scripts/build-initramfs.sh &
+          PASS2_PID=$!
+          # Surface each pass's exit status independently so a failed
+          # pass-2 doesn't get masked if pass-1 happens to finish first.
+          wait "$PASS1_PID" || { echo "pass 1 failed"; exit 1; }
+          wait "$PASS2_PID" || { echo "pass 2 failed"; exit 1; }
+          p1=$(awk '{print $1}' out1/initramfs.cpio.gz.sha256)
+          p2=$(awk '{print $1}' out2/initramfs.cpio.gz.sha256)
           echo "Pass 1: $p1"
           echo "Pass 2: $p2"
           if [ "$p1" = "$p2" ]; then
