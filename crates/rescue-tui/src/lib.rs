@@ -32,5 +32,6 @@ pub mod persistence;
 pub mod render;
 pub mod state;
 pub mod theme;
+pub mod tier_b_log;
 pub mod tpm;
 pub mod verdict;

@@ -49,6 +49,8 @@ pub(crate) enum ScreenKind {
     Quitting,
     /// "Cannot boot" toast over a tier-4 row. (#546)
     BlockedToast,
+    /// Consent screen for elevated-risk boot paths (#347).
+    Consent,
 }
 
 impl ScreenKind {
@@ -66,6 +68,7 @@ impl ScreenKind {
             Screen::ConfirmQuit { .. } => Self::ConfirmQuit,
             Screen::Quitting => Self::Quitting,
             Screen::BlockedToast { .. } => Self::BlockedToast,
+            Screen::Consent { .. } => Self::Consent,
         }
     }
 }
