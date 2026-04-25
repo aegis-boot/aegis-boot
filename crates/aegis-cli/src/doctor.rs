@@ -287,6 +287,7 @@ pub(crate) fn try_run(args: &[String]) -> Result<(), u8> {
     check_tpm(&mut report);
     check_nics(&mut report);
     check_smart(&mut report);
+    check_memory(&mut report);
     check_removable_drives(&mut report);
     check_block_devices(&mut report);
     if !json_mode {
@@ -1269,6 +1270,41 @@ fn check_smart(report: &mut Report) {
     }
 }
 
+/// Surface a one-line memory inventory (#564). Reads `/proc/meminfo` for
+/// total RAM on Linux. ECC / slot count / DIMM speed are deliberately
+/// deferred to a follow-up — they live in DMI Type 16 / Type 17 binary
+/// tables under `/sys/firmware/dmi/entries/` (or require a `dmidecode`
+/// subprocess that needs root). For the M1H scope, total RAM is the
+/// single most operator-relevant fact and is readable without root.
+///
+/// macOS and Windows skip with a platform note. The `system_profiler`
+/// (macOS) and `Get-CimInstance Win32_PhysicalMemory` (Windows) probes
+/// are tracked under #123 alongside the rest of cross-platform doctor.
+fn check_memory(report: &mut Report) {
+    let name = "memory (host)".to_string();
+
+    #[cfg(target_os = "linux")]
+    {
+        match read_meminfo_total_kb("/proc/meminfo") {
+            Some(total_kb) => report.add(Verdict::Pass, name, format_total_memory_detail(total_kb)),
+            None => report.add(
+                Verdict::Skip,
+                name,
+                "could not read /proc/meminfo MemTotal field",
+            ),
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        report.add(
+            Verdict::Skip,
+            name,
+            "memory inventory not yet implemented on this platform (#123)",
+        );
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NicInfo {
@@ -1375,6 +1411,37 @@ fn parse_smart_health_json(stdout: &[u8]) -> SmartHealth {
     } else {
         SmartHealth::Warn
     }
+}
+
+#[cfg(target_os = "linux")]
+fn read_meminfo_total_kb(path: &str) -> Option<u64> {
+    let body = std::fs::read_to_string(path).ok()?;
+    parse_meminfo_total_kb(&body)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_meminfo_total_kb(body: &str) -> Option<u64> {
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("MemTotal:") {
+            // Format: "MemTotal:       65546912 kB"
+            return rest
+                .split_whitespace()
+                .next()
+                .and_then(|kb| kb.parse::<u64>().ok());
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::cast_precision_loss)]
+fn format_total_memory_detail(total_kb: u64) -> String {
+    // Convert kB → GiB. 1 GiB = 1024 * 1024 kB. Show one decimal.
+    let gib = total_kb as f64 / (1024.0 * 1024.0);
+    format!(
+        "{gib:.1} GiB total (slot count, ECC, and DIMM speed deferred — \
+         require DMI Type 16/17 parse, see #564 follow-up)"
+    )
 }
 
 fn check_removable_drives(report: &mut Report) {
@@ -2413,6 +2480,62 @@ mod tests {
     fn check_nics_skips_on_non_linux() {
         let mut r = Report::new();
         check_nics(&mut r);
+        assert_eq!(r.rows.len(), 1);
+        assert!(matches!(r.rows[0].0, Verdict::Skip));
+    }
+
+    // ---- memory inventory (#564) -----------------------------------------
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parse_meminfo_total_kb_reads_first_field() {
+        let body = "MemTotal:       65546912 kB\nMemFree: 1234 kB\n";
+        assert_eq!(parse_meminfo_total_kb(body), Some(65_546_912));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parse_meminfo_total_kb_returns_none_when_field_missing() {
+        let body = "MemFree:        1234 kB\nBuffers: 5678 kB\n";
+        assert_eq!(parse_meminfo_total_kb(body), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parse_meminfo_total_kb_returns_none_on_malformed_value() {
+        let body = "MemTotal:       NOT_A_NUMBER kB\n";
+        assert_eq!(parse_meminfo_total_kb(body), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn read_meminfo_total_kb_returns_none_when_file_missing() {
+        let total = read_meminfo_total_kb("/definitely/does/not/exist/aegis-meminfo-probe");
+        assert_eq!(total, None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn format_total_memory_detail_renders_gib() {
+        // 16 GiB exact: 16 * 1024 * 1024 = 16777216 kB
+        let detail = format_total_memory_detail(16_777_216);
+        assert!(detail.starts_with("16.0 GiB total"), "got: {detail}");
+    }
+
+    #[test]
+    fn check_memory_emits_exactly_one_row() {
+        let mut r = Report::new().with_json_mode(true);
+        check_memory(&mut r);
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.rows[0].1, "memory (host)");
+        assert!(matches!(r.rows[0].0, Verdict::Pass | Verdict::Skip));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn check_memory_skips_on_non_linux() {
+        let mut r = Report::new();
+        check_memory(&mut r);
         assert_eq!(r.rows.len(), 1);
         assert!(matches!(r.rows[0].0, Verdict::Skip));
     }
