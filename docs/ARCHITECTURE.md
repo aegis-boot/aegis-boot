@@ -2,6 +2,42 @@
 
 One-page mental model for contributors. For decision rationale see [ADR 0001](./adr/0001-runtime-architecture.md). For threat boundaries see [THREAT_MODEL.md](../THREAT_MODEL.md).
 
+## What aegis-boot is
+
+aegis-boot is **trusted boot, recovery, and provisioning tooling** — a CLI that takes a blank USB stick to a booted ISO with the chain of trust visible at every step.
+
+Concretely, the value proposition is:
+
+- **Sign-time + flash-time provenance** — the on-stick `Manifest` records what was written; the host-side `Attestation` records who flashed it, where from, and what verified.
+- **Boot-time enforcement** — `KEXEC_SIG` rejects unsigned kernels under Secure Boot, with a `mokutil`-paste-ready remedy when the operator has the signing key.
+- **Operator-facing trust verdicts** — rescue-tui surfaces a six-tier verdict (verified / unverified / hash-mismatch / parse-failed / boot-blocked) without burying the trust state in logs.
+
+USB is the delivery mechanism today. Network boot (PXE / iPXE / UEFI HTTP boot) is a deferred delivery — see [ADR 0003](./adr/0003-defer-netboot-daemon.md) for why and the explicit re-entry criteria.
+
+### What aegis-boot is NOT
+
+Honest framing helps operators choose the right tool:
+
+- **Not a Ventoy clone.** Ventoy boots arbitrary ISOs by patching them or chainloading their loaders; aegis-boot kexec's a verified rescue kernel into the chosen ISO, preserving Secure Boot end-to-end.
+- **Not a desktop-distro launcher.** The target is admins flashing rescue / install / provisioning media on demand, not "always have 30 distros on a stick."
+- **Not a container scanner / generic security tool.** The trust we model is boot-chain trust (UEFI → shim → grub → kernel → ISO kexec), not application-layer trust.
+- **Not a password manager / secret vault.** Operators bring their own.
+- **Not an enterprise imaging-suite replacement.** No central server, no inventory, no policy engine. Single-operator workflows are the design center.
+
+### Umbrella concept (forward-looking)
+
+The shape is one product with multiple delivery types. Today only the ISO-on-USB delivery is implemented. Future delivery types are reserved as variants on [`BootEntryKind`](../crates/iso-parser/src/lib.rs) (issue #557 — landed alongside this section) and gated by ADRs:
+
+| Delivery | Status | Re-entry |
+| --- | --- | --- |
+| ISO on USB | Shipping | — |
+| Netboot (PXE / iPXE / UEFI HTTP boot) | Deferred | [ADR 0003](./adr/0003-defer-netboot-daemon.md) — ≥2 user requests OR maintainer netboot-lab commitment |
+| Recovery profiles as a distinct typed subsystem | Deferred | [ADR 0005](./adr/0005-defer-recovery-profiles-distinct-type.md) — concrete operator scenario + schema-evolution commitment |
+| Provisioning profiles (kickstart / autoinstall / cloud-init refs) | Deferred | Same ADR 0005 |
+| Golden-image baseline / drift detection | Deferred | [ADR 0004](./adr/0004-defer-golden-image-registry.md) — concrete comparison workflow |
+
+There is no "Aegis Boot USB" / "Aegis Netboot" sub-brand split. The CLI stays unified as `aegis-boot`. See [ADR 0006](./adr/0006-no-usb-netboot-rebrand.md) for the rebrand decision.
+
 ## Boot chain
 
 ```
