@@ -1403,11 +1403,7 @@ fn flash(
     // Step 3b: macOS requires an explicit unmount of the disk's volumes
     // before dd'ing to the raw device. Linux doesn't; skip it there.
     #[cfg(target_os = "macos")]
-    {
-        let _ = Command::new("diskutil")
-            .args(["unmountDisk", &drive.dev.display().to_string()])
-            .status();
-    }
+    macos_unmount_disk(&drive.dev)?;
 
     // Step 3c: dd with progress.
     println!();
@@ -1541,6 +1537,36 @@ fn flash(
         }
     }
 
+    Ok(())
+}
+
+/// Unmount all volumes on a macOS raw-disk device before dd writes to
+/// it. Refuses to proceed if `diskutil` reports a hold — proceeding
+/// would risk silent corruption of a live filesystem.
+///
+/// Why fail loud (#597): the previous `let _ = ...status()` swallowed
+/// both spawn errors (binary missing / sandbox denial) and exit-code
+/// failures (`FileVault`, FUSE, `console.app`, security-agent holds).
+/// dd-ing a still-mounted macOS disk is undefined behavior at the
+/// driver level — the kernel may silently un-do part of the write
+/// from stale buffer-cache pages.
+///
+/// `diskutil unmountDisk` returns success on already-unmounted, so
+/// failing on non-success is safe; only true holds bail.
+#[cfg(target_os = "macos")]
+fn macos_unmount_disk(dev: &std::path::Path) -> Result<(), String> {
+    let dev_path = dev.display().to_string();
+    let status = Command::new("diskutil")
+        .args(["unmountDisk", &dev_path])
+        .status()
+        .map_err(|e| format!("diskutil unmountDisk: spawn failed ({e})"))?;
+    if !status.success() {
+        return Err(format!(
+            "could not unmount {dev_path} before dd; refusing to write \
+             to a mounted disk. Try: `diskutil unmountDisk force {dev_path}` \
+             then re-run aegis-boot flash."
+        ));
+    }
     Ok(())
 }
 
