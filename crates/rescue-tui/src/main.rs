@@ -1342,12 +1342,12 @@ mod tests {
         // AEGIS_ISO_ROOTS=/run/media/aegis-isos:/run/media — the
         // second root is a parent of the first, so a naive sum of
         // walks would count each ISO twice.
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
         let inner = tmp.path().join("aegis-isos");
-        std::fs::create_dir(&inner).unwrap();
-        std::fs::write(inner.join("alpine.iso"), b"x").unwrap();
-        std::fs::write(inner.join("ubuntu.iso"), b"x").unwrap();
-        std::fs::write(inner.join("win11.iso"), b"x").unwrap();
+        std::fs::create_dir(&inner).unwrap_or_else(|e| panic!("create_dir: {e}"));
+        for name in ["alpine.iso", "ubuntu.iso", "win11.iso"] {
+            std::fs::write(inner.join(name), b"x").unwrap_or_else(|e| panic!("write {name}: {e}"));
+        }
 
         let roots = vec![inner.clone(), tmp.path().to_path_buf()];
         // 3 unique ISOs, even though the recursive walks visit each
@@ -1357,8 +1357,8 @@ mod tests {
 
     #[test]
     fn count_iso_files_on_disk_skips_missing_roots() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join("foo.iso"), b"x").unwrap();
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        std::fs::write(tmp.path().join("foo.iso"), b"x").unwrap_or_else(|e| panic!("write: {e}"));
         let roots = vec![
             tmp.path().to_path_buf(),
             PathBuf::from("/nonexistent/aegis-test-root"),
