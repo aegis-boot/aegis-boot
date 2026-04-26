@@ -13,6 +13,7 @@
 // tiers-docgen (#462) can share them. main.rs is a thin driver.
 use rescue_tui::{failure_log, persistence, render, state, theme, tier_b_log, tpm};
 
+use std::collections::HashSet;
 use std::env;
 use std::io;
 use std::path::PathBuf;
@@ -113,14 +114,19 @@ fn persist_tier_b_log(failed: &[iso_probe::FailedIso]) {
 /// to the operator without requiring them to read journalctl.
 fn count_iso_files_on_disk(roots: &[PathBuf]) -> usize {
     const MAX_DEPTH: u32 = 3;
-    fn walk(dir: &std::path::Path, depth: u32) -> usize {
+    // Dedupe by canonical absolute path so overlapping roots
+    // (e.g. AEGIS_ISO_ROOTS=/run/media/aegis-isos:/run/media — the
+    // /init default) don't count the same .iso file twice. iso-probe's
+    // discover() already dedupes its results; without the same dedup
+    // here, the inline "N ISO(s) failed to parse" band overcounts
+    // (#623).
+    fn walk(dir: &std::path::Path, depth: u32, seen: &mut HashSet<PathBuf>) {
         if depth == 0 {
-            return 0;
+            return;
         }
         let Ok(entries) = std::fs::read_dir(dir) else {
-            return 0;
+            return;
         };
-        let mut n = 0usize;
         for entry in entries.flatten() {
             let path = entry.path();
             let Ok(ft) = entry.file_type() else { continue };
@@ -130,20 +136,20 @@ fn count_iso_files_on_disk(roots: &[PathBuf]) -> usize {
                     .and_then(|e| e.to_str())
                     .is_some_and(|e| e.eq_ignore_ascii_case("iso"))
             {
-                n += 1;
+                let key = std::fs::canonicalize(&path).unwrap_or(path);
+                seen.insert(key);
             } else if ft.is_dir() {
-                n += walk(&path, depth - 1);
+                walk(&path, depth - 1, seen);
             }
         }
-        n
     }
-    let mut total = 0usize;
+    let mut seen: HashSet<PathBuf> = HashSet::new();
     for root in roots {
         if root.exists() {
-            total += walk(root, MAX_DEPTH);
+            walk(root, MAX_DEPTH, &mut seen);
         }
     }
-    total
+    seen.len()
 }
 
 fn parse_roots(env_var: Option<&str>) -> Vec<PathBuf> {
@@ -1326,6 +1332,38 @@ mod tests {
                 PathBuf::from("/c"),
             ]
         );
+    }
+
+    // ---- count_iso_files_on_disk (#623 dedup overlapping roots) ------
+
+    #[test]
+    fn count_iso_files_on_disk_dedupes_overlapping_roots() {
+        // Reproduces #623: /init exports
+        // AEGIS_ISO_ROOTS=/run/media/aegis-isos:/run/media — the
+        // second root is a parent of the first, so a naive sum of
+        // walks would count each ISO twice.
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let inner = tmp.path().join("aegis-isos");
+        std::fs::create_dir(&inner).unwrap_or_else(|e| panic!("create_dir: {e}"));
+        for name in ["alpine.iso", "ubuntu.iso", "win11.iso"] {
+            std::fs::write(inner.join(name), b"x").unwrap_or_else(|e| panic!("write {name}: {e}"));
+        }
+
+        let roots = vec![inner.clone(), tmp.path().to_path_buf()];
+        // 3 unique ISOs, even though the recursive walks visit each
+        // file from both the inner and outer roots.
+        assert_eq!(count_iso_files_on_disk(&roots), 3);
+    }
+
+    #[test]
+    fn count_iso_files_on_disk_skips_missing_roots() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        std::fs::write(tmp.path().join("foo.iso"), b"x").unwrap_or_else(|e| panic!("write: {e}"));
+        let roots = vec![
+            tmp.path().to_path_buf(),
+            PathBuf::from("/nonexistent/aegis-test-root"),
+        ];
+        assert_eq!(count_iso_files_on_disk(&roots), 1);
     }
 
     // ---- epoch_to_civil_date (#548 verify-audit-log) -----------------
