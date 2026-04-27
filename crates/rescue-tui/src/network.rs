@@ -310,10 +310,12 @@ options edns0
 
     #[test]
     fn enumerate_interfaces_under_skips_loopback_and_non_ethernet() {
-        // Build a fake /sys/class/net under tempdir.
-        let tmp = std::env::temp_dir().join(format!("rescue-tui-net-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        // Build a fake /sys/class/net under a properly-randomized
+        // tempdir (tempfile crate; cleans up on drop). Avoids the
+        // semgrep `temp-dir.temp-dir` flag on `std::env::temp_dir()`
+        // — predictable filenames are TOCTOU-prone even in tests.
+        let tmp_handle = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let tmp = tmp_handle.path();
 
         // lo: type=772 (loopback) — must be skipped
         let lo = tmp.join("lo");
@@ -342,12 +344,10 @@ options edns0
         std::fs::write(bond0.join("type"), "24\n").unwrap();
         std::fs::write(bond0.join("operstate"), "up\n").unwrap();
 
-        let ifaces = enumerate_interfaces_under(&tmp);
+        let ifaces = enumerate_interfaces_under(tmp);
         let names: Vec<&str> = ifaces.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, vec!["eth0", "wlan0"]);
         assert_eq!(ifaces[0].link_state, LinkState::Up);
         assert_eq!(ifaces[1].link_state, LinkState::Down);
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

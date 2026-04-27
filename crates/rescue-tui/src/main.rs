@@ -1108,7 +1108,7 @@ enum NetworkMsg {
 ///   `-i <iface>`  bind to interface
 ///   `-n`          fail (don't fork) if no lease
 ///   `-q`          quit after lease/fail (one-shot)
-///   `-t 5`        try DISCOVERs 5 times before giving up
+///   `-t 5`        try DHCP DISCOVER 5 times before giving up
 ///   `-T 2`        2-second timeout per attempt
 fn spawn_dhcp_worker(iface: String) -> Receiver<NetworkMsg> {
     let (tx, rx) = mpsc::channel();
