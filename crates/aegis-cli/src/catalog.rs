@@ -270,6 +270,21 @@ pub const CATALOG: &[Entry] = &[
         resolver: None,
     },
     Entry {
+        slug: "gparted-live-1.8.1",
+        name: "GParted Live 1.8.1-3",
+        arch: "x86_64",
+        size_mib: 500,
+        // GParted Live hosts the ISO on SourceForge (download mirror
+        // redirect) and the signed CHECKSUMS on gparted.org directly.
+        iso_url: "https://downloads.sourceforge.net/gparted/gparted-live-1.8.1-3-amd64.iso",
+        sha256_url: "https://gparted.org/gparted-live/stable/CHECKSUMS.TXT",
+        sig_url: "https://gparted.org/gparted-live/stable/CHECKSUMS.TXT.gpg",
+        sb: SbStatus::Signed("Debian shim chain (GParted)"),
+        purpose: "Partition editor live ISO. Resize, repair, image disks.",
+        category: Category::Rescue,
+        resolver: None,
+    },
+    Entry {
         // Not on DistroWatch top-15 but the de-facto pentest distro
         // operators expect to see in a rescue-stick catalog.
         slug: "kali-2026.1-installer",
@@ -384,6 +399,28 @@ pub const CATALOG: &[Entry] = &[
         sb: SbStatus::Signed("Rocky Linux"),
         purpose: "Free RHEL-rebuild minimal installer. Cross-distro kexec quirk possible.",
         category: Category::Installer,
+        resolver: None,
+    },
+    Entry {
+        slug: "systemrescue-13.00",
+        name: "SystemRescue 13.00",
+        arch: "x86_64",
+        size_mib: 900,
+        // SystemRescue's CDN is fastly-cdn.system-rescue.org; the .asc
+        // is a detached PGP signature on the ISO itself (not on a
+        // SHA256SUMS file — different from the Debian/Ubuntu pattern).
+        // The .sha256 holds the literal `<hash>  <filename>` line; both
+        // are kept for operators who prefer signature-on-ISO vs
+        // hash-list-with-sig flows.
+        iso_url: "https://fastly-cdn.system-rescue.org/releases/13.00/systemrescue-13.00-amd64.iso",
+        sha256_url: "https://fastly-cdn.system-rescue.org/releases/13.00/systemrescue-13.00-amd64.iso.sha256",
+        sig_url: "https://fastly-cdn.system-rescue.org/releases/13.00/systemrescue-13.00-amd64.iso.asc",
+        // Arch-derived; SystemRescue ships their own kernel signed by
+        // their key, but stock-SB machines need MOK enrollment. Same
+        // posture as Manjaro until validated end-to-end (#629 follow).
+        sb: SbStatus::UnsignedNeedsMok,
+        purpose: "Comprehensive rescue toolkit: parted, testdisk, ddrescue, clamav.",
+        category: Category::Rescue,
         resolver: None,
     },
     Entry {
