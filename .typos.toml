@@ -30,6 +30,13 @@ mis = "mis"
 # (c12a7328-f81f-11d2-ba4b-00a0c93ec93b): `ba4b` triggers a `ba → by/be`
 # flag on pure-substring matching.
 ba4b = "ba4b"
+# Hex prefixes / fragments used in aegis-fetch verify tests
+# (#655 Phase 2B). `ba7816bf` is the canonical SHA-256("abc") test
+# vector; `ba78`/`ba79` are synthetic single-digit-flipped fragments
+# the tamper tests use to invalidate a signed hash.
+ba7816bf = "ba7816bf"
+ba78 = "ba78"
+ba79 = "ba79"
 # Synthetic hardware serial used in init_wizard doc examples.
 AKE74Z1Y00098765 = "AKE74Z1Y00098765"
 # "NAMEs" abbreviated as "NAM" in a comment describing man-page sections.

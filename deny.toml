@@ -38,6 +38,19 @@ ignore = [
     # crate, core dep for rescue-tui). Resolved when ratatui drops it
     # (ratatui 0.30 is tracked in #258 but blocked on MSRV bump).
     { id = "RUSTSEC-2024-0436", reason = "transitive via ratatui 0.29; resolved with #258 ratatui bump" },
+    # rsa Marvin Attack — timing sidechannel on private-key
+    # operations. Pulled in transitively by pgp (rpgp) → aegis-fetch
+    # (#655 Phase 2B). aegis-fetch is verify-only: we hold no RSA
+    # private keys and never decrypt or sign. The Marvin Attack
+    # extracts private-key bits via observation of decryption /
+    # signing timing — there is no such key or operation in our
+    # process. The advisory's own workaround says: "avoid using rsa
+    # in settings where attackers are able to observe timing
+    # information." We satisfy that by not exposing any
+    # private-key-using primitive. Re-evaluate if rpgp ever gains a
+    # signing-side consumer here, or if a constant-time rsa fix
+    # ships and rpgp picks it up.
+    { id = "RUSTSEC-2023-0071", reason = "transitive via pgp/rpgp; aegis-fetch is verify-only and holds no RSA private keys, so the timing sidechannel on private-key operations is not exploitable in our threat model" },
 ]
 
 # ─── Licenses ─────────────────────────────────────────────────────────
