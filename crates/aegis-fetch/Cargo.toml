@@ -1,0 +1,49 @@
+[package]
+name = "aegis-fetch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "HTTPS download + signed-chain verification for aegis-boot catalog ISOs (#655 Phase 2B). Shared by the host CLI and the rescue-tui in-rescue fetch path."
+readme = "README.md"
+
+include = ["src/**/*", "README.md", "Cargo.toml"]
+
+[lib]
+
+[dependencies]
+aegis-catalog = { path = "../aegis-catalog" }
+thiserror = { workspace = true }
+
+# HTTPS via rustls + ring. default-features = false drops gzip
+# decompression we don't need for ISO downloads (vendors serve
+# binary content uncompressed).
+ureq = { version = "3.3", default-features = false, features = ["rustls"] }
+
+# Pure-Rust OpenPGP impl. MIT OR Apache-2.0 — fits the workspace
+# outbound dual license without LGPL static-linking obligations.
+# See project_aegis_fetch_design_decisions for why this is rpgp
+# rather than sequoia-openpgp.
+#
+# default-features = false drops the `bzip2` feature, which would
+# otherwise pull in `libbz2-rs-sys` (`bzip2-1.0.6` license — not
+# in deny.toml allow-list). aegis-fetch is verify-only on
+# clearsigned + detached signatures; OpenPGP message
+# decompression isn't part of that path.
+pgp = { version = "0.19", default-features = false }
+
+# SHA-256 for the sha256_url verification step. MIT OR Apache-2.0.
+sha2 = "0.10"
+
+[dev-dependencies]
+# Hermetic fixture I/O for the verify-path tests.
+tempfile = "3.14"
+# Used by verify-path tests to generate Ed25519 test certs at
+# runtime, so signed fixtures don't need to be checked into git.
+# rpgp re-exports its own `rand` types but the keygen API takes
+# any RngCore + CryptoRng, so we bring the trait directly.
+rand = "0.8"
+
+[lints]
+workspace = true
