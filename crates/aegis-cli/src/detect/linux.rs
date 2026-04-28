@@ -5,10 +5,37 @@
 //! Enumerates `/sys/block/sd*` looking for removable USB mass storage
 //! devices. Filters out system drives, `NVMe`, loop devices, and anything
 //! not flagged as removable by the kernel.
+//!
+//! ## USB-attached SSD fallback (#661)
+//!
+//! Some USB-attached SSDs (Kingston, Samsung T7, etc.) report
+//! `/sys/block/<dev>/removable == 0` even though they're on the USB
+//! bus and the operator wants to flash them. The strict
+//! `removable == 1` gate excludes them, leaving the user with a
+//! confusing "not a removable drive" error against an obviously-USB
+//! device.
+//!
+//! Fallback: when `removable == 0`, accept the drive anyway if its
+//! transport is USB **and** its size is at or below
+//! [`USB_FALLBACK_SIZE_CAP_BYTES`] (2 TiB). The size ceiling
+//! prevents false-positives on USB-attached external HDDs that
+//! happen to be plugged in for backup purposes — those are
+//! typically > 2 TiB, and flashing an operator's backup drive
+//! would be catastrophic.
 
 use super::{BlockDevice, BlockDeviceTransport, Drive};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Hard size ceiling for the USB-fallback path (#661). Drives
+/// reporting `removable == 0` are accepted only when their
+/// transport is USB AND their size is at or below this value.
+/// 2 TiB covers every common USB stick + USB SSD product on the
+/// market (largest commodity drives in 2026: ~4 TB, marketed as
+/// external storage; sticks max at ~2 TB). Operators with
+/// 4+ TiB USB drives can still flash via explicit
+/// `/dev/sdX` (which bypasses auto-detect entirely).
+const USB_FALLBACK_SIZE_CAP_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
 
 /// Scan sysfs for removable USB block devices suitable for flashing.
 /// Returns them sorted by device name.
@@ -26,14 +53,16 @@ pub fn list_removable_drives() -> Vec<Drive> {
             continue;
         }
         let sysdir = entry.path();
-        // Must be removable.
-        if read_sysfs_int(&sysdir.join("removable")) != Some(1) {
-            continue;
-        }
-        // Read model + size.
+        // Read model + size + removable + transport up-front so the
+        // accept-decision can consider all four together (#661 fallback).
         let model = read_sysfs_str(&sysdir.join("device/model"))
             .unwrap_or_else(|| "(unknown model)".to_string());
         let size_bytes = read_sysfs_int_u64(&sysdir.join("size")).unwrap_or(0) * 512;
+        let removable_flag = read_sysfs_int(&sysdir.join("removable"));
+        let transport = classify_transport(&sysdir, &name_str);
+        if !drive_passes_filter(removable_flag, transport, size_bytes) {
+            continue;
+        }
         // Count partitions (sdX1, sdX2, ...).
         let partitions = fs::read_dir(&sysdir).map_or(0, |iter| {
             iter.flatten()
@@ -139,6 +168,34 @@ fn classify_transport(sysdir: &Path, name: &str) -> BlockDeviceTransport {
     BlockDeviceTransport::Unknown
 }
 
+/// Decide whether a `sd*` block device is acceptable as a flash
+/// target given its kernel `removable` flag, bus transport, and
+/// reported size in bytes.
+///
+/// Strict accept: `removable == 1` (the historic gate; matches
+/// the SD-card / canonical USB-stick case).
+///
+/// USB-attached-SSD fallback (#661): when `removable == 0`,
+/// accept iff transport is USB AND size is at or below
+/// [`USB_FALLBACK_SIZE_CAP_BYTES`]. Drives with `removable == 0`
+/// and a non-USB transport (SATA, SCSI, virtio, unknown) are
+/// rejected — those are system disks. Drives with USB transport
+/// but `size_bytes == 0` (sysfs read failed) are also rejected;
+/// we'd rather miss the drive than risk a false-positive when
+/// the size ceiling can't be applied.
+fn drive_passes_filter(
+    removable_flag: Option<i64>,
+    transport: BlockDeviceTransport,
+    size_bytes: u64,
+) -> bool {
+    if removable_flag == Some(1) {
+        return true;
+    }
+    matches!(transport, BlockDeviceTransport::Usb)
+        && size_bytes > 0
+        && size_bytes <= USB_FALLBACK_SIZE_CAP_BYTES
+}
+
 fn read_sysfs_str(path: &Path) -> Option<String> {
     fs::read_to_string(path).ok()
 }
@@ -164,6 +221,114 @@ mod tests {
                 "expected {keep} to be inventoried"
             );
         }
+    }
+
+    // ---- #661: USB-fallback accept logic --------------------------
+
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    const GIB: u64 = 1024 * MIB;
+    const TIB: u64 = 1024 * GIB;
+
+    #[test]
+    fn removable_flag_one_is_always_accepted() {
+        // Historic case: SD card / canonical USB stick reports
+        // removable=1. Transport doesn't matter; size doesn't matter.
+        assert!(drive_passes_filter(
+            Some(1),
+            BlockDeviceTransport::Usb,
+            8 * GIB
+        ));
+        assert!(drive_passes_filter(
+            Some(1),
+            BlockDeviceTransport::Sata,
+            128 * GIB
+        ));
+        assert!(drive_passes_filter(
+            Some(1),
+            BlockDeviceTransport::Unknown,
+            0
+        ));
+    }
+
+    #[test]
+    fn usb_with_removable_zero_under_cap_is_accepted() {
+        // #661: 256 GB Kingston USB SSD reports removable=0.
+        // Should be accepted via USB-fallback path.
+        assert!(drive_passes_filter(
+            Some(0),
+            BlockDeviceTransport::Usb,
+            256 * GIB
+        ));
+        // Edge case: exactly at the cap (2 TiB) is accepted.
+        assert!(drive_passes_filter(
+            Some(0),
+            BlockDeviceTransport::Usb,
+            USB_FALLBACK_SIZE_CAP_BYTES
+        ));
+    }
+
+    #[test]
+    fn usb_with_removable_zero_over_cap_is_rejected() {
+        // 4 TiB external HDD on USB — most likely operator's backup
+        // drive, not a flash target. Reject.
+        assert!(!drive_passes_filter(
+            Some(0),
+            BlockDeviceTransport::Usb,
+            4 * TIB
+        ));
+        // Just over the cap.
+        assert!(!drive_passes_filter(
+            Some(0),
+            BlockDeviceTransport::Usb,
+            USB_FALLBACK_SIZE_CAP_BYTES + 1
+        ));
+    }
+
+    #[test]
+    fn usb_with_zero_size_is_rejected() {
+        // sysfs size read failed (size_bytes == 0). Reject under the
+        // USB fallback path — without size we can't apply the ceiling.
+        assert!(!drive_passes_filter(Some(0), BlockDeviceTransport::Usb, 0));
+    }
+
+    #[test]
+    fn non_usb_with_removable_zero_is_rejected() {
+        // SATA / SCSI / virtio / unknown transports with removable=0
+        // are system disks. Reject regardless of size.
+        for tran in [
+            BlockDeviceTransport::Sata,
+            BlockDeviceTransport::Scsi,
+            BlockDeviceTransport::Virtio,
+            BlockDeviceTransport::Unknown,
+        ] {
+            assert!(
+                !drive_passes_filter(Some(0), tran, 8 * GIB),
+                "{tran:?} with removable=0 must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_removable_flag_is_rejected_for_non_usb() {
+        // Some virtual / virtio devices have no removable file.
+        // Treat as not removable.
+        assert!(!drive_passes_filter(
+            None,
+            BlockDeviceTransport::Sata,
+            8 * GIB
+        ));
+    }
+
+    #[test]
+    fn missing_removable_flag_falls_through_to_usb_fallback() {
+        // If removable is unreadable but transport is USB and size
+        // is sane, still accept under the fallback path.
+        assert!(drive_passes_filter(
+            None,
+            BlockDeviceTransport::Usb,
+            32 * GIB
+        ));
     }
 
     #[test]
