@@ -48,7 +48,7 @@ pub(crate) fn verify_clearsigned_sums(
     clearsigned_text: &str,
     entry_slug: &str,
 ) -> Result<VerifiedClearsign, FetchError> {
-    let cert = parse_cert(cert_bytes, entry_slug)?;
+    let certs = parse_certs(cert_bytes, entry_slug)?;
     let (msg, _hdr) = CleartextSignedMessage::from_string(clearsigned_text).map_err(|e| {
         // rpgp surfaces an error variant for "no envelope found".
         // Distinguish it from a verification failure so the
@@ -65,14 +65,12 @@ pub(crate) fn verify_clearsigned_sums(
             }
         }
     })?;
-    msg.verify(&cert)
-        .map_err(|e| FetchError::SignatureVerifyFailed {
-            entry: entry_slug.to_string(),
-            detail: format!("clearsign verify: {e}"),
-        })?;
+    let fingerprint_hex = try_verify_against_each(&certs, entry_slug, "clearsign verify", |c| {
+        msg.verify(c).map(|_sig| ())
+    })?;
     Ok(VerifiedClearsign {
         signed_text: msg.signed_text(),
-        fingerprint_hex: fingerprint_hex(&cert),
+        fingerprint_hex,
     })
 }
 
@@ -92,14 +90,11 @@ pub(crate) fn verify_detached_sig_on_sums(
     sums_bytes: &[u8],
     entry_slug: &str,
 ) -> Result<String, FetchError> {
-    let cert = parse_cert(cert_bytes, entry_slug)?;
+    let certs = parse_certs(cert_bytes, entry_slug)?;
     let sig = parse_detached_sig(sig_bytes, entry_slug)?;
-    sig.verify(&cert, sums_bytes)
-        .map_err(|e| FetchError::SignatureVerifyFailed {
-            entry: entry_slug.to_string(),
-            detail: format!("detached-on-sums verify: {e}"),
-        })?;
-    Ok(fingerprint_hex(&cert))
+    try_verify_against_each(&certs, entry_slug, "detached-on-sums verify", |c| {
+        sig.verify(c, sums_bytes)
+    })
 }
 
 /// Verify a detached PGP signature over the ISO bytes
@@ -122,31 +117,84 @@ pub(crate) fn verify_detached_sig_on_iso(
     iso_path: &Path,
     entry_slug: &str,
 ) -> Result<String, FetchError> {
-    let cert = parse_cert(cert_bytes, entry_slug)?;
+    let certs = parse_certs(cert_bytes, entry_slug)?;
     let sig = parse_detached_sig(sig_bytes, entry_slug)?;
-    let file = File::open(iso_path).map_err(|e| FetchError::Filesystem {
-        detail: format!("open {} for sig verify: {e}", iso_path.display()),
-    })?;
-    let reader = BufReader::with_capacity(1 << 20, file);
-    sig.signature
-        .verify(&cert, reader)
-        .map_err(|e| FetchError::SignatureVerifyFailed {
-            entry: entry_slug.to_string(),
-            detail: format!("detached-on-iso verify: {e}"),
-        })?;
-    Ok(fingerprint_hex(&cert))
+    // Stat-check upfront so a missing ISO produces a clean
+    // FetchError::Filesystem rather than getting wrapped in a
+    // SignatureVerifyFailed by the try-each loop.
+    if !iso_path.exists() {
+        return Err(FetchError::Filesystem {
+            detail: format!("iso not found for sig verify: {}", iso_path.display()),
+        });
+    }
+    // ISO is on disk; re-open per cert attempt so the streaming
+    // reader's position resets cleanly. The OS page cache
+    // amortizes re-reads after the first pass.
+    try_verify_against_each(&certs, entry_slug, "detached-on-iso verify", |c| {
+        let file = File::open(iso_path)
+            .map_err(|e| pgp::errors::Error::from(format!("open {}: {e}", iso_path.display())))?;
+        let reader = BufReader::with_capacity(1 << 20, file);
+        sig.signature.verify(c, reader)
+    })
 }
 
-/// Parse a [`SignedPublicKey`] from armored or binary cert bytes.
-fn parse_cert(bytes: &[u8], entry_slug: &str) -> Result<SignedPublicKey, FetchError> {
-    let parsed = if is_armored(bytes) {
-        SignedPublicKey::from_armor_single(bytes).map(|(k, _)| k)
+/// Parse a (possibly multi-cert) ASCII-armored or binary `OpenPGP`
+/// keyring blob into one or more [`SignedPublicKey`] entries.
+///
+/// Vendor `.asc` files are sometimes single-cert (Ubuntu, Rocky,
+/// Kali, Alpine), sometimes multi-cert bundles (Fedora ships 4
+/// per-release keys; Manjaro ships ~27 developer keys; Debian
+/// ships 2). At verify time, the caller iterates and asks each
+/// cert to verify the signature — the one whose key ID matches
+/// the signature's issuer subpacket succeeds; the rest fail
+/// cleanly.
+fn parse_certs(bytes: &[u8], entry_slug: &str) -> Result<Vec<SignedPublicKey>, FetchError> {
+    let result: Result<Vec<SignedPublicKey>, pgp::errors::Error> = if is_armored(bytes) {
+        SignedPublicKey::from_armor_many(bytes)
+            .and_then(|(iter, _hdr)| iter.collect::<Result<Vec<_>, _>>())
     } else {
-        SignedPublicKey::from_bytes(BufReader::new(bytes))
+        SignedPublicKey::from_bytes_many(BufReader::new(bytes))
+            .and_then(Iterator::collect::<Result<Vec<_>, _>>)
     };
-    parsed.map_err(|e| FetchError::SignatureVerifyFailed {
+    let certs = result.map_err(|e| FetchError::SignatureVerifyFailed {
         entry: entry_slug.to_string(),
         detail: format!("parse vendor cert: {e}"),
+    })?;
+    if certs.is_empty() {
+        return Err(FetchError::SignatureVerifyFailed {
+            entry: entry_slug.to_string(),
+            detail: "no certs parsed from vendor keyring".to_string(),
+        });
+    }
+    Ok(certs)
+}
+
+/// Try-each helper: invoke `verify_one(&cert)` against each cert
+/// in the parsed bundle, returning `Ok(fingerprint_hex)` on the
+/// first cert that succeeds. If every cert rejects the signature
+/// the most-recent error is wrapped into [`FetchError::SignatureVerifyFailed`].
+fn try_verify_against_each<F>(
+    certs: &[SignedPublicKey],
+    entry_slug: &str,
+    op_name: &str,
+    mut verify_one: F,
+) -> Result<String, FetchError>
+where
+    F: FnMut(&SignedPublicKey) -> Result<(), pgp::errors::Error>,
+{
+    let mut last_err: Option<pgp::errors::Error> = None;
+    for cert in certs {
+        match verify_one(cert) {
+            Ok(()) => return Ok(fingerprint_hex(cert)),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    let last_err_str = last_err.map_or_else(|| "none".to_string(), |e| format!("{e}"));
+    Err(FetchError::SignatureVerifyFailed {
+        entry: entry_slug.to_string(),
+        detail: format!(
+            "{op_name}: no cert in keyring matched signature (last error: {last_err_str})"
+        ),
     })
 }
 
@@ -355,7 +403,7 @@ mod tests {
     fn parses_armored_cert() {
         let (armored, _) = gen_test_cert();
         assert!(armored.starts_with(b"-----BEGIN PGP"));
-        let _ = parse_cert(&armored, "x").expect("parse armored");
+        let _ = parse_certs(&armored, "x").expect("parse armored");
     }
 
     #[test]
@@ -366,6 +414,6 @@ mod tests {
         let (cert, _) = SignedPublicKey::from_armor_single(&armored[..]).expect("parse");
         let mut binary = Vec::new();
         cert.to_writer(&mut binary).expect("to_writer");
-        let _ = parse_cert(&binary, "x").expect("parse binary");
+        let _ = parse_certs(&binary, "x").expect("parse binary");
     }
 }

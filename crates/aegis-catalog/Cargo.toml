@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Curated ISO catalog + URL resolvers for aegis-boot. Shared by the host CLI and the rescue-tui in-rescue fetch path (#655 Phase 2)."
 readme = "README.md"
 
-include = ["src/**/*", "README.md", "Cargo.toml"]
+include = ["src/**/*", "keyring/**/*", "README.md", "Cargo.toml"]
 
 [lib]
 

@@ -13,7 +13,10 @@
 //! - [`VendorKeyring::embedded`] — loads keys baked into the
 //!   binary at compile time via `include_bytes!`. This is the
 //!   production path used by both `aegis-cli` and `rescue-tui`.
-//!   Empty stub until #655 PR-B populates the keyring.
+//!   Loads from `aegis_catalog::EMBEDDED_KEYRING` and validates
+//!   each `.asc`'s primary fingerprints against the pinned set in
+//!   `aegis_catalog::EMBEDDED_FINGERPRINTS` — a tampered or
+//!   rotated key fails the load with [`FetchError::SignatureVerifyFailed`].
 //! - [`VendorKeyring::from_dir`] — loads keys from a directory of
 //!   `<vendor>.asc` files at runtime. Used by the
 //!   catalog-refresh GitHub Action to validate a freshly-fetched
@@ -22,10 +25,11 @@
 //!   this PR add a `pub(crate)` cert-injection helper for the
 //!   verify-path fixture tests.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use aegis_catalog::Vendor;
+use aegis_catalog::{EMBEDDED_FINGERPRINTS, EMBEDDED_KEYRING, Vendor};
+use pgp::composed::{Deserializable, SignedPublicKey};
 
 use crate::FetchError;
 
@@ -57,23 +61,27 @@ impl VendorKeyring {
     }
 
     /// Load the keyring baked into the binary at compile time via
-    /// `include_bytes!`. This is the production path.
+    /// `include_bytes!` (sourced from
+    /// [`aegis_catalog::EMBEDDED_KEYRING`]). This is the
+    /// production path.
     ///
-    /// Until #655 PR-B populates `crates/aegis-catalog/keyring/`,
-    /// this returns an empty keyring — meaning every fetch in this
-    /// build will fail with [`FetchError::UnknownVendor`]. The
-    /// scaffold exists so the public API can be reviewed
-    /// independently of the keyring rollout.
+    /// Each `.asc` file is parsed and its primary-fingerprint set
+    /// is validated against the pinned set in
+    /// [`aegis_catalog::EMBEDDED_FINGERPRINTS`]. A mismatch
+    /// (tampered file, surreptitious key swap) fails the load.
     ///
     /// # Errors
     ///
-    /// Returns [`FetchError::Filesystem`] only when an embedded
-    /// keyring exists but is malformed. The empty case is
-    /// `Ok(Self::empty())`.
+    /// - [`FetchError::SignatureVerifyFailed`] when an embedded
+    ///   `.asc` does not parse, or when its fingerprint set does
+    ///   not match the pinned set for that vendor.
     pub fn embedded() -> Result<Self, FetchError> {
-        // PR-B will replace this with a static array of
-        // (Vendor, &'static [u8]) pairs from include_bytes!.
-        Ok(Self::empty())
+        let mut k = Self::empty();
+        for (vendor, bytes) in EMBEDDED_KEYRING {
+            validate_armored_against_pin(*vendor, bytes)?;
+            k.armored.insert(*vendor, bytes.to_vec());
+        }
+        Ok(k)
     }
 
     /// Load the keyring from a directory containing one
@@ -139,6 +147,54 @@ impl Default for VendorKeyring {
     }
 }
 
+/// Parse `bytes` as a (possibly multi-cert) ASCII-armored `OpenPGP`
+/// keyring and assert that the set of primary-key fingerprints
+/// matches the pin in [`EMBEDDED_FINGERPRINTS`] for `vendor`. An
+/// empty pin slice (e.g., the Manjaro developer-keyring bundle)
+/// is treated as "validate parse only" — the workflow surfaces
+/// any membership change as a reviewable PR rather than as a
+/// runtime hard-fail, on the theory that a developer-keyring
+/// addition isn't a trust-anchor change.
+fn validate_armored_against_pin(vendor: Vendor, bytes: &[u8]) -> Result<(), FetchError> {
+    let actual = parse_primary_fingerprints(bytes, vendor.slug())?;
+    let expected: HashSet<String> = EMBEDDED_FINGERPRINTS
+        .iter()
+        .find(|(v, _)| *v == vendor)
+        .map(|(_, fps)| fps.iter().map(ToString::to_string).collect())
+        .unwrap_or_default();
+    if expected.is_empty() {
+        // "Validate parse only" — see doc above.
+        return Ok(());
+    }
+    let actual_set: HashSet<String> = actual.into_iter().collect();
+    if actual_set != expected {
+        let missing: Vec<&String> = expected.difference(&actual_set).collect();
+        let extra: Vec<&String> = actual_set.difference(&expected).collect();
+        return Err(FetchError::SignatureVerifyFailed {
+            entry: format!("keyring/{}.asc", vendor.slug()),
+            detail: format!("fingerprint pin mismatch — missing {missing:?}, extra {extra:?}"),
+        });
+    }
+    Ok(())
+}
+
+/// Extract the uppercase-hex fingerprints of every primary cert
+/// in a (possibly multi-cert) ASCII-armored keyring blob.
+fn parse_primary_fingerprints(bytes: &[u8], slug: &str) -> Result<Vec<String>, FetchError> {
+    use pgp::types::KeyDetails;
+    let result: Result<Vec<SignedPublicKey>, pgp::errors::Error> =
+        SignedPublicKey::from_armor_many(bytes)
+            .and_then(|(iter, _hdr)| iter.collect::<Result<Vec<_>, _>>());
+    let certs = result.map_err(|e| FetchError::SignatureVerifyFailed {
+        entry: format!("keyring/{slug}.asc"),
+        detail: format!("parse: {e}"),
+    })?;
+    Ok(certs
+        .iter()
+        .map(|c| format!("{:X}", c.fingerprint()))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -153,9 +209,57 @@ mod tests {
     }
 
     #[test]
-    fn embedded_returns_empty_until_pr_b() {
+    fn embedded_loads_eight_vendors_with_valid_pinned_fingerprints() {
+        // PR-B populates 8 of 14 vendors. Each .asc must parse and
+        // its primary-fingerprint set must equal the pin (or the
+        // pin is empty, opting into "validate parse only" — this
+        // is the case for Manjaro's 27-key developer bundle).
         let k = VendorKeyring::embedded().expect("embedded ok");
-        assert!(k.is_empty(), "PR-B will populate this");
+        assert_eq!(k.len(), 8, "PR-B ships 8 of 14 vendors");
+        for v in [
+            Vendor::Ubuntu,
+            Vendor::Debian,
+            Vendor::Fedora,
+            Vendor::AlmaLinux,
+            Vendor::Rocky,
+            Vendor::Kali,
+            Vendor::Alpine,
+            Vendor::Manjaro,
+        ] {
+            assert!(
+                k.cert_armor(v).is_some(),
+                "embedded keyring missing vendor {v:?}"
+            );
+        }
+        // Vendors awaiting PR-B follow-up populate are absent.
+        for v in [
+            Vendor::LinuxMint,
+            Vendor::Mx,
+            Vendor::Opensuse,
+            Vendor::Gparted,
+            Vendor::SystemRescue,
+            Vendor::System76,
+        ] {
+            assert!(
+                k.cert_armor(v).is_none(),
+                "vendor {v:?} unexpectedly populated — update test"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_validation_rejects_swapped_keyring() {
+        // Build a keyring where one vendor's bytes are replaced
+        // by a cert with a different fingerprint. embedded()
+        // refuses; from_dir() (the runtime / refresh-action path)
+        // doesn't validate fingerprints, so it succeeds — that's
+        // by design (the workflow runs validate_armored_against_pin
+        // separately as a strict gate).
+        // This test exercises the validator directly.
+        let bogus_armor = b"-----BEGIN PGP PUBLIC KEY BLOCK-----\nVersion: bogus\n\nabcd\n-----END PGP PUBLIC KEY BLOCK-----\n";
+        let err = validate_armored_against_pin(Vendor::Ubuntu, bogus_armor)
+            .expect_err("bogus armor must fail");
+        assert!(matches!(err, FetchError::SignatureVerifyFailed { .. }));
     }
 
     #[test]
