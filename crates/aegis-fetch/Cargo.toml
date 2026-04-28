@@ -25,7 +25,13 @@ ureq = { version = "3.3", default-features = false, features = ["rustls"] }
 # outbound dual license without LGPL static-linking obligations.
 # See project_aegis_fetch_design_decisions for why this is rpgp
 # rather than sequoia-openpgp.
-pgp = "0.19"
+#
+# default-features = false drops the `bzip2` feature, which would
+# otherwise pull in `libbz2-rs-sys` (`bzip2-1.0.6` license — not
+# in deny.toml allow-list). aegis-fetch is verify-only on
+# clearsigned + detached signatures; OpenPGP message
+# decompression isn't part of that path.
+pgp = { version = "0.19", default-features = false }
 
 # SHA-256 for the sha256_url verification step. MIT OR Apache-2.0.
 sha2 = "0.10"

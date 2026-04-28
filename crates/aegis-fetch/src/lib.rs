@@ -39,8 +39,9 @@
 
 use std::path::{Path, PathBuf};
 
-use aegis_catalog::{Entry, Vendor};
+use aegis_catalog::{Entry, SigPattern, Vendor};
 
+mod download;
 mod keyring;
 mod sha256;
 mod sums;
@@ -193,21 +194,192 @@ pub enum FetchError {
 ///
 /// See [`FetchError`] for the failure taxonomy.
 pub fn fetch_catalog_entry(
-    _entry: &Entry,
-    _dest_dir: &Path,
-    _keyring: &VendorKeyring,
-    _on_event: &mut dyn FnMut(FetchEvent),
+    entry: &Entry,
+    dest_dir: &Path,
+    keyring: &VendorKeyring,
+    on_event: &mut dyn FnMut(FetchEvent),
 ) -> Result<FetchOutcome, FetchError> {
-    // Implemented in successive commits in this PR:
-    //   1. HTTPS downloader  (commit 2)
-    //   2. SHA-256 hasher    (commit 3)
-    //   3. PGP verify dispatch on SigPattern (commit 4)
-    //   4. wire-up           (commit 5)
-    //
-    // Until then, callers can construct + validate the keyring,
-    // inspect the type surface, and write fixture-driven tests
-    // against the verify primitives directly.
-    Err(FetchError::Filesystem {
-        detail: "fetch_catalog_entry not yet wired (#655 Phase 2B in progress)".to_string(),
+    let cert_bytes = keyring
+        .cert_armor(entry.vendor)
+        .ok_or(FetchError::UnknownVendor {
+            vendor: entry.vendor,
+        })?;
+
+    std::fs::create_dir_all(dest_dir).map_err(|e| FetchError::Filesystem {
+        detail: format!("create {}: {e}", dest_dir.display()),
+    })?;
+
+    let iso_filename = filename_from_url(entry.iso_url);
+    let iso_path = dest_dir.join(iso_filename);
+    let bytes = download::download_to_file(entry.iso_url, &iso_path, on_event)?;
+
+    let fingerprint = match entry.verify {
+        SigPattern::ClearsignedSums => {
+            verify_clearsigned_path(entry, cert_bytes, &iso_path, on_event)?
+        }
+        SigPattern::DetachedSigOnSums => {
+            verify_detached_on_sums_path(entry, cert_bytes, &iso_path, on_event)?
+        }
+        SigPattern::DetachedSigOnIso => {
+            verify_detached_on_iso_path(entry, cert_bytes, &iso_path, on_event)?
+        }
+    };
+
+    let outcome = FetchOutcome {
+        iso_path,
+        bytes,
+        sha256_hex: fingerprint.iso_sha256_hex,
+        vendor: entry.vendor,
+        key_fingerprint: fingerprint.signer_fingerprint_hex,
+    };
+    on_event(FetchEvent::Done(outcome.clone()));
+    Ok(outcome)
+}
+
+/// Result of a verify dispatch — both the cert fingerprint that
+/// authenticated the artifact and the ISO's sha256, since both
+/// flow into [`FetchOutcome`].
+struct VerifyResult {
+    iso_sha256_hex: String,
+    signer_fingerprint_hex: String,
+}
+
+fn verify_clearsigned_path(
+    entry: &Entry,
+    cert_bytes: &[u8],
+    iso_path: &Path,
+    on_event: &mut dyn FnMut(FetchEvent),
+) -> Result<VerifyResult, FetchError> {
+    // sha256_url == sig_url for ClearsignedSums; one fetch.
+    let sums_bytes = download::download_to_vec(entry.sha256_url)?;
+    let sums_text =
+        std::str::from_utf8(&sums_bytes).map_err(|e| FetchError::SignatureVerifyFailed {
+            entry: entry.slug.to_string(),
+            detail: format!("clearsigned sums not utf-8: {e}"),
+        })?;
+
+    on_event(FetchEvent::VerifyingSig);
+    let verified = verify::verify_clearsigned_sums(cert_bytes, sums_text, entry.slug)?;
+
+    on_event(FetchEvent::VerifyingHash);
+    let mut last_hash_bytes: u64 = 0;
+    let (iso_sha256_hex, _bytes) = sha256::hash_file(iso_path, &mut |b| last_hash_bytes = b)?;
+    let _ = last_hash_bytes;
+
+    let iso_filename = filename_from_url(entry.iso_url);
+    let expected = sums::find_iso_sha256(&verified.signed_text, iso_filename)?;
+    if !iso_sha256_hex.eq_ignore_ascii_case(&expected) {
+        return Err(FetchError::Sha256Mismatch {
+            expected,
+            actual: iso_sha256_hex,
+            iso: iso_filename.to_string(),
+        });
+    }
+    Ok(VerifyResult {
+        iso_sha256_hex,
+        signer_fingerprint_hex: verified.fingerprint_hex,
     })
+}
+
+fn verify_detached_on_sums_path(
+    entry: &Entry,
+    cert_bytes: &[u8],
+    iso_path: &Path,
+    on_event: &mut dyn FnMut(FetchEvent),
+) -> Result<VerifyResult, FetchError> {
+    let sums_bytes = download::download_to_vec(entry.sha256_url)?;
+    let sig_bytes = download::download_to_vec(entry.sig_url)?;
+
+    on_event(FetchEvent::VerifyingSig);
+    let signer_fingerprint_hex =
+        verify::verify_detached_sig_on_sums(cert_bytes, &sig_bytes, &sums_bytes, entry.slug)?;
+
+    on_event(FetchEvent::VerifyingHash);
+    let (iso_sha256_hex, _bytes) = sha256::hash_file(iso_path, &mut |_| {})?;
+
+    let sums_text = std::str::from_utf8(&sums_bytes).map_err(|_| FetchError::MalformedSums)?;
+    let iso_filename = filename_from_url(entry.iso_url);
+    let expected = sums::find_iso_sha256(sums_text, iso_filename)?;
+    if !iso_sha256_hex.eq_ignore_ascii_case(&expected) {
+        return Err(FetchError::Sha256Mismatch {
+            expected,
+            actual: iso_sha256_hex,
+            iso: iso_filename.to_string(),
+        });
+    }
+    Ok(VerifyResult {
+        iso_sha256_hex,
+        signer_fingerprint_hex,
+    })
+}
+
+fn verify_detached_on_iso_path(
+    entry: &Entry,
+    cert_bytes: &[u8],
+    iso_path: &Path,
+    on_event: &mut dyn FnMut(FetchEvent),
+) -> Result<VerifyResult, FetchError> {
+    let sig_bytes = download::download_to_vec(entry.sig_url)?;
+
+    on_event(FetchEvent::VerifyingSig);
+    let signer_fingerprint_hex =
+        verify::verify_detached_sig_on_iso(cert_bytes, &sig_bytes, iso_path, entry.slug)?;
+
+    // The signature already authenticates the ISO bytes; the
+    // sha256 here is informational, surfaced in FetchOutcome for
+    // audit logs and `aegis-boot doctor` output.
+    on_event(FetchEvent::VerifyingHash);
+    let (iso_sha256_hex, _bytes) = sha256::hash_file(iso_path, &mut |_| {})?;
+
+    Ok(VerifyResult {
+        iso_sha256_hex,
+        signer_fingerprint_hex,
+    })
+}
+
+fn filename_from_url(url: &str) -> &str {
+    url.rsplit('/').next().unwrap_or("download")
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+    use super::*;
+    use aegis_catalog::CATALOG;
+
+    #[test]
+    fn empty_keyring_short_circuits_with_unknown_vendor() {
+        // An empty keyring should make fetch_catalog_entry return
+        // UnknownVendor before any network or filesystem
+        // interaction. This is the production posture until #655
+        // PR-B populates the keyring — every fetch must fail
+        // cleanly instead of silently bypassing verification.
+        let entry = CATALOG
+            .iter()
+            .find(|e| e.slug == "ubuntu-24.04-live-server")
+            .expect("seeded entry");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let keyring = VendorKeyring::empty();
+        let mut events: Vec<FetchEvent> = Vec::new();
+        let err = fetch_catalog_entry(entry, dir.path(), &keyring, &mut |e| events.push(e))
+            .expect_err("must fail without keyring");
+        assert!(matches!(
+            err,
+            FetchError::UnknownVendor {
+                vendor: Vendor::Ubuntu
+            }
+        ));
+        // No events emitted; we short-circuit before Connecting.
+        assert!(events.is_empty(), "no events on UnknownVendor path");
+    }
+
+    #[test]
+    fn filename_from_url_handles_basic_paths() {
+        assert_eq!(
+            filename_from_url("https://x.example/a/b/file.iso"),
+            "file.iso"
+        );
+        assert_eq!(filename_from_url("https://x.example/file"), "file");
+        assert_eq!(filename_from_url("https://x.example/"), "");
+    }
 }

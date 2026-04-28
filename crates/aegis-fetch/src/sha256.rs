@@ -6,10 +6,6 @@
 //! progress callback per chunk so the caller can render a
 //! progress bar without loading the entire ISO into memory.
 
-// Used by `fetch_catalog_entry`'s VerifyingHash phase, wired in
-// after the HTTPS downloader commit.
-#![allow(dead_code)]
-
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;

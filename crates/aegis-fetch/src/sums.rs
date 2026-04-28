@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Parse SHA-256 / SHA-512 sums files of the shape vendors publish.
-
-// Used by the verify-dispatch path inside `fetch_catalog_entry`,
-// wired in after the HTTPS downloader commit.
-#![allow(dead_code)]
 //!
 //! Two layouts are common:
 //!

@@ -9,12 +9,6 @@
 //!
 //! [`SigPattern`]: aegis_catalog::SigPattern
 
-// Warnings on `pub(crate)` items in this module are silenced until
-// the HTTPS downloader commit lands and `fetch_catalog_entry`
-// dispatches into them. The verify primitives are tested
-// in-isolation in this module's `#[cfg(test)]` block.
-#![allow(dead_code)]
-
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;

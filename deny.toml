@@ -65,6 +65,16 @@ allow = [
     "Zlib",
     "CC0-1.0",
     "MPL-2.0",
+    # Linux Foundation's Community Data License Agreement —
+    # Permissive 2.0. Data-license analog of MIT/Apache: free
+    # use, redistribution, and modification with attribution.
+    # Reaches our graph via `webpki-roots` (Mozilla CA root
+    # certificate bundle), pulled in by `ureq[rustls]` from
+    # `aegis-fetch` (#655 Phase 2B). The crate's code is ISC;
+    # only the embedded CA bundle data is CDLA-Permissive-2.0,
+    # which is the appropriate data license. Compatible with our
+    # dual MIT/Apache-2.0 outbound.
+    "CDLA-Permissive-2.0",
 ]
 # NOT allowed (blocked by omission from `allow`, listed here for audit):
 #   GPL-2.0, GPL-3.0, AGPL-1.0, AGPL-3.0, LGPL-2.0, LGPL-2.1, LGPL-3.0,
