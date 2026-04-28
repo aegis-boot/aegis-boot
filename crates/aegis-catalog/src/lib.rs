@@ -628,15 +628,96 @@ pub fn truncate(s: &str, max: usize) -> String {
 }
 
 // =====================================================================
+// Embedded vendor keyring (#655 Phase 2B PR-B)
+// =====================================================================
+
+/// Vendor → ASCII-armored `OpenPGP` cert bytes baked in at compile
+/// time via `include_bytes!` from `crates/aegis-catalog/keyring/`.
+///
+/// `aegis-fetch`'s `VendorKeyring::embedded()` consumes this slice
+/// to build the production keyring. Vendors referenced by
+/// [`CATALOG`] but not in this slice cause [`Vendor::UnknownVendor`]
+/// failures at fetch time — that's the documented partial-coverage
+/// state for vendors whose upstream keyring URL is still being
+/// sourced (see `keyring/fingerprints.toml` for the TODO list).
+///
+/// Set membership of this slice + `EMBEDDED_FINGERPRINTS` is
+/// enforced by a unit test that loads each `.asc` and asserts the
+/// extracted primary-fingerprint set equals the pinned set.
+pub const EMBEDDED_KEYRING: &[(Vendor, &[u8])] = &[
+    (Vendor::Ubuntu, include_bytes!("../keyring/ubuntu.asc")),
+    (Vendor::Debian, include_bytes!("../keyring/debian.asc")),
+    (Vendor::Fedora, include_bytes!("../keyring/fedora.asc")),
+    (
+        Vendor::AlmaLinux,
+        include_bytes!("../keyring/almalinux.asc"),
+    ),
+    (Vendor::Rocky, include_bytes!("../keyring/rocky.asc")),
+    (Vendor::Kali, include_bytes!("../keyring/kali.asc")),
+    (Vendor::Alpine, include_bytes!("../keyring/alpine.asc")),
+    (Vendor::Manjaro, include_bytes!("../keyring/manjaro.asc")),
+];
+
+/// Vendor → set of pinned primary-key fingerprints (uppercase hex,
+/// no spaces). Mirrors `keyring/fingerprints.toml` for runtime
+/// enforcement; the `.toml` file is the human-reviewable source
+/// of truth and the catalog-refresh workflow keeps both in sync.
+///
+/// The loader asserts set-equality between the parsed cert
+/// fingerprints and the pinned slice on each `embedded()` call.
+/// Mismatch = trust boundary breach = refuse to load.
+///
+/// Vendors absent from this slice are PR-B partial-coverage
+/// vendors; their entries in `keyring/fingerprints.toml` carry
+/// the TODO marker.
+pub const EMBEDDED_FINGERPRINTS: &[(Vendor, &[&str])] = &[
+    (
+        Vendor::Ubuntu,
+        &["843938DF228D22F7B3742BC0D94AA3F0EFE21092"],
+    ),
+    (
+        Vendor::Debian,
+        &["04B54C3CDCA79751B16BC6B5225629DF75B188BD"],
+    ),
+    (
+        Vendor::Fedora,
+        &[
+            "B0F4950458F69E1150C6C5EDC8AC4916105EF944",
+            "C6E7F081CF80E13146676E88829B606631645531",
+            "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
+            "4F50A6114CD5C6976A7F1179655A4B02F577861E",
+        ],
+    ),
+    (
+        Vendor::AlmaLinux,
+        &["BF18AC2876178908D6E71267D36CB86CB86B3716"],
+    ),
+    (Vendor::Rocky, &["7051C470A929F454CEBE37B715AF5DAC6D745A60"]),
+    (Vendor::Kali, &["827C8569F2518CC677FECA1AED65462EC8D5E4C5"]),
+    (
+        Vendor::Alpine,
+        &["0482D84022F52DF1C4E7CD43293ACD0907D9495A"],
+    ),
+    // Manjaro is the developer-keyring bundle (27 certs). Pinning
+    // every fingerprint here would be churny on every key
+    // rotation; the loader instead validates "all certs in .asc
+    // parse cleanly" without strict-set-equality. The
+    // catalog-refresh workflow surfaces any new cert as a
+    // reviewable PR.
+    (Vendor::Manjaro, &[]),
+];
+
+// =====================================================================
 // The catalog
 // =====================================================================
 
 /// The catalog itself. Keep entries alphabetically sorted by slug.
 ///
-/// Pinned URLs are the project's "current stable" pages (releases.ubuntu.com,
-/// getfedora.org, etc.). When point releases bump, the URL stays valid for
-/// at least one cycle; older releases tend to move to /old-releases/ paths.
-/// Update entries when a major version ships, not for every point release.
+/// Pinned URLs are the project's "current stable" pages
+/// (releases.ubuntu.com, getfedora.org, etc.). When point releases
+/// bump, the URL stays valid for at least one cycle; older
+/// releases tend to move to /old-releases/ paths. Update entries
+/// when a major version ships, not for every point release.
 // Only entries whose URLs verify under `scripts/catalog-revalidate.sh`
 // are listed here. Many speculative / upstream-rotted entries were
 // removed in a cleanup pass — see issue #156 + CATALOG_POLICY.md.

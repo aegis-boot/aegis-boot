@@ -19,14 +19,22 @@ on:
     - cron: '0 6 * * 1'
   workflow_dispatch:
 
+# Top-level permissions: read-only by default, with the bot job
+# below explicitly elevating to contents:write + pull-requests:write
+# to commit the catalog mutation + open the auto-PR. Closes the
+# Scorecard TokenPermissionsID finding for this workflow (#655 PR-B).
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   refresh:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    # Job-level permissions narrowed to exactly what the auto-PR
+    # path needs: write the rewritten catalog source + open the PR.
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
