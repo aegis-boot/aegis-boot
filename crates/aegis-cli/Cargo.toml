@@ -120,7 +120,7 @@ minisign = { version = "0.9", default-features = false }
 # already validates the version pin + feature list — no surprise-
 # feature-flip in the wiring PR.
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     # Win32_Security pulls in the SECURITY_ATTRIBUTES type that
     # CreateFileW's signature references. The signature compiles
