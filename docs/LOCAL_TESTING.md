@@ -64,6 +64,8 @@ After Phase 1 of [#580](https://github.com/aegis-boot/aegis-boot/issues/580), th
 
 ## One-time setup
 
+### Debian / Ubuntu
+
 ```bash
 sudo apt-get install -y \
     qemu-system-x86 ovmf \
@@ -79,6 +81,38 @@ sudo chmod 0644 /boot/vmlinuz-* /boot/initrd.img-*
 sudo usermod -aG kvm,libvirt "$USER"
 # Log out and back in for group changes to take effect.
 ```
+
+### Fedora / RHEL / Rocky
+
+```bash
+sudo dnf install -y \
+    qemu-system-x86 edk2-ovmf \
+    shim grub2-efi-x64 kernel-core \
+    mtools dosfstools exfatprogs gdisk \
+    busybox cpio xorriso util-linux
+sudo chmod 0644 /boot/vmlinuz-* /boot/initramfs-*
+sudo usermod -aG kvm,libvirt "$USER"
+```
+
+### Arch / Manjaro
+
+```bash
+sudo pacman -S --needed \
+    qemu-system-x86 edk2-ovmf \
+    shim-signed grub linux \
+    mtools dosfstools exfatprogs gptfdisk \
+    busybox cpio xorriso util-linux
+sudo chmod 0644 /boot/vmlinuz-*
+sudo usermod -aG kvm,libvirt "$USER"
+```
+
+### Cross-distro: pin the Rust toolchain to match CI
+
+```bash
+rustup install 1.95.0
+```
+
+`tools/local-ci.sh` auto-prefers `cargo +1.95.0` when present; without it, lints from a newer host rustc fire that CI's pinned 1.95.0 doesn't catch.
 
 ## Run everything
 
@@ -204,3 +238,24 @@ Then boot via `qemu-try.sh` — the TUI should list your ISOs.
 The scripts are deliberately identical to what CI invokes. If `dev-test.sh` passes locally, CI should too. If they diverge (different kernel, different OVMF version, different runner arch), file an issue — we want local to match the reference CI environment.
 
 CI status is the merge gate; local testing is the pre-push sanity check. CI runs are visible at the [Actions tab](https://github.com/aegis-boot/aegis-boot/actions).
+
+### Coverage matrix — what local catches vs what's CI-only
+
+| Aspect | `quick` | `kexec` | `ovmf-secboot` | `mkusb` | `all` | CI |
+|---|---|---|---|---|---|---|
+| `cargo check` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `clippy -D warnings` (1.95.0 pin) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Lib unit tests | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Doctests | | | | | | ✓ |
+| Cross-compile (macOS / Windows) | | | | | | ✓ |
+| `cargo-deny` advisories + licenses | | | | | | ✓ |
+| `cargo-machete` unused deps | | | | | | ✓ |
+| QEMU + OVMF kexec handoff | | ✓ | | | ✓ | ✓ |
+| QEMU + OVMF SB enforcing | | | ✓ | ✓ | ✓ | ✓ |
+| `mkusb.sh` end-to-end | | | | ✓ | ✓ | ✓ |
+| Reproducible-build byte-parity | | | | | | ✓ |
+| Real-hardware USB stick | only via `thumb-drive` | | | | | (no — by design) |
+| CodeQL static analysis | | | | | | ✓ |
+| OpenSSF Scorecard | | | | | | ✓ |
+
+A green `tools/local-ci.sh all` does NOT replace CI. It catches the QEMU-shaped failures CI catches plus a few more (`thumb-drive` is real hardware), but misses cross-platform compile, doctest coverage, supply-chain gates, and reproducible-build parity. Push when `all` is green AND the CI cross-compile + doctest + deny + machete + CodeQL workflows pass.
