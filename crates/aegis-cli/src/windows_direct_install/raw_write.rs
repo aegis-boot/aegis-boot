@@ -535,8 +535,10 @@ mod sys {
     }
 
     fn last_error_message(op: &str) -> String {
-        // windows::core::Error::from_win32() reads GetLastError.
-        let err = windows::core::Error::from_win32();
+        // windows-rs 0.59+ renamed `from_win32` → `from_thread`. Same
+        // semantics: reads `GetLastError()` from the current thread
+        // and wraps as a `windows::core::Error`.
+        let err = windows::core::Error::from_thread();
         let code = u32::try_from(err.code().0).unwrap_or(u32::MAX);
         format!("{op}: {}", translate_win32_error(code))
     }
