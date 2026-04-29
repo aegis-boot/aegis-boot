@@ -68,9 +68,26 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Install initramfs build dependencies
+        # linux-image-virtual provides the 5.15.0-*-generic vmlinuz +
+        # /lib/modules/<ver>/ that build-initramfs.sh bakes in. Consumers
+        # (kexec-e2e-shared) install the same package on their own
+        # runner; modules + kernel must match or modprobe fails inside
+        # QEMU and `ip link set lo up` panics PID 1. Without this step
+        # build-initramfs.sh falls back to the runner host's
+        # 6.8.0-*-azure modules, which don't load on a 5.15-virtual
+        # boot.
+        #
+        # qemu-smoke-shared works around this gap because qemu-smoke.sh
+        # doesn't modprobe anything; kexec-e2e.sh DOES (loop / isofs /
+        # udf for the fixture-ISO mount path). Adding the kernel here
+        # is what makes that consumer green.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends busybox-static cpio
+          sudo apt-get install -y --no-install-recommends \
+            busybox-static cpio \
+            linux-image-virtual
+          sudo chmod 0644 /boot/vmlinuz-* /boot/initrd.img-* 2>/dev/null || true
+          ls -l /boot/vmlinuz-* /boot/initrd.img-*
 
       - name: Install Rust toolchain (from rust-toolchain.toml)
         run: rustup show
