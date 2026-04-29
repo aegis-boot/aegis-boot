@@ -4,6 +4,29 @@ All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](
 
 ## [Unreleased]
 
+### CI feedback-loop speedup — paths-ignore + shared-artifact pattern (#580 Phases 1+2)
+
+The CI matrix was burning ~45 CPU minutes per PR; ~25 of those were 6 QEMU E2E jobs each rebuilding rescue-tui + initramfs from scratch on top of full reproducible-build + CodeQL. Phases 1 and 2 of [#580](https://github.com/aegis-boot/aegis-boot/issues/580) close that gap; Phases 3 (nextest) and 4 (CodeQL scope) are explicitly deferred — Phase 3 has marginal payoff for our test-runtime profile, and Phase 4 needs a separate security review.
+
+**Phase 1 — skip-when-irrelevant filters.** Audit + add `paths-ignore` blocks to every workflow that doesn't read markdown content. After PRs #592 / #683:
+
+- All 6 QEMU E2E workflows + reproducible-build skip on `**/*.md`, `docs/**`, `.github/ISSUE_TEMPLATE/**`, `LICENSE*` (PR #592).
+- `initramfs.yml`, `integration.yml`, `machete.yml` skip the same set (PR #683).
+- Only `ci.yml` deliberately keeps running on docs-only — clippy doc_markdown lints fire on `*.md` content pulled in via `#[doc = include_str!(...)]`.
+
+A docs-only PR's CI now completes in ~2 min instead of ~5+, and CPU minutes per docs PR drop by ~5–6.
+
+**Phase 2 — shared-artifact pattern.** The 6 QEMU E2E workflows each rebuilt `rescue-tui` + `initramfs.cpio.gz` independently; combined that was ~3 CPU min of redundant work per PR. New `e2e-suite.yml` produces those artifacts once in a `build-shared` job and feeds them to consumer jobs via `needs:` + `actions/download-artifact`. Rolled out canary-then-retire across 8 PRs:
+
+- **PR #614 (Phase 2a)** — `build-shared` producer + canary `qemu-smoke-shared`. Contrarian-flagged risks (branch-protection deadlock, doctest coverage, cache quota) folded into the design: `paths-ignore` preserved, doctests parallel, `target/` cache excluded.
+- **PR #685 (Phase 2b)** — retire standalone `qemu-smoke.yml` after 10+ green-pair PRs.
+- **PRs #686–#690 (Phases 2c–2g)** — add canaries for kexec-e2e, mkusb, direct-install (most complex — uses two-path ESP byte-parity diff against mkusb), update-rotate (drift injection + rotation roundtrip), and ovmf-secboot. Phase 2c surfaced a real bug: `build-shared` was baking the runner's azure-host kernel modules into the initramfs, breaking the kexec consumer's modprobe path. Fixed by installing `linux-image-virtual` in the producer so consumer + producer share kernel + module versions.
+- **PR #691 (Phase 2 retirement)** — coordinated `git rm` of kexec-e2e.yml + mkusb.yml + direct-install-e2e.yml + update-rotate-e2e.yml + the `ovmf-secboot-e2e` job from ovmf-secboot.yml. The foundation job stays — no shared deps.
+
+**Phase 0 (PR #585) shipped earlier**: `tools/local-ci.sh` modal harness mirroring the CI E2E suite locally. `tools/local-ci.sh quick` returns in ~9 s vs ~5 min CI roundtrip; the QEMU subcommands run in 1–3 min on a libvirt-attached dev host. Operator setup + CI fidelity matrix added to `docs/LOCAL_TESTING.md` in PR #684.
+
+**Combined result**: ~7.5 CPU min saved per PR going forward; the 6 QEMU E2E gates collapse to 5 jobs in one workflow gated by a shared producer. The `tools/local-ci.sh quick` pre-push gate gets the fastest local feedback to ~9 s.
+
 ### In-rescue ISO download over network (closes #655)
 
 Thirteen PRs across three phases ship the full operator path "rescue-tui boots → operator picks a distro → ISO downloads + verifies in place." A vendor keyring is embedded in the `aegis-catalog` crate; a new `aegis-fetch` crate handles the end-to-end download + signed-chain verify; the rescue-tui Catalog + Confirm screens drive the worker; and the host CLI exposes the same primitive as `aegis-boot fetch <slug>`. No system `gpg` / `curl` / `sha256sum` involved — pure-Rust ureq + rustls + ring + rpgp.
