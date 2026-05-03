@@ -35,9 +35,13 @@ CANONICAL_VERSION="$(
     awk '
         /^\[workspace\.package\]/ { f=1; next }
         f && /^\[/                 { exit }
-        f && /^version = /         {
-            gsub(/^version = "|"$/, "", $0)
-            print
+        f && /^version = "/        {
+            # Match: version = "X.Y.Z" [# trailing comment]
+            # release-please uses an `# x-release-please-version`
+            # annotation after the value; extract just the quoted
+            # version literal so the trailing comment is ignored.
+            match($0, /"[^"]+"/)
+            print substr($0, RSTART + 1, RLENGTH - 2)
             exit
         }
     ' Cargo.toml
