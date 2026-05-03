@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# release-please — Google's conventional-commits-driven release automation.
+#
+# How it works:
+#
+#   1. Every push to main, this workflow scans new commits since the
+#      last release tag for conventional-commit prefixes (feat:, fix:,
+#      docs:, ci:, etc. — see release-please-config.json's
+#      changelog-sections for the full list).
+#
+#   2. If new commits exist, release-please opens (or updates) a single
+#      "chore: release X.Y.Z" PR that:
+#        - Bumps `[workspace.package].version` in Cargo.toml
+#        - Bumps annotated lines in extra-files (intra-workspace pins
+#          in 3 crate Cargo.tomls, version literals in docs/INSTALL.md
+#          + docs/CLI.md, flake.nix derivation version) — each
+#          annotated with `x-release-please-version` in-line / via
+#          HTML-comment (see those files for examples)
+#        - Prepends a new section to CHANGELOG.md grouping the new
+#          commits by conventional-commit type
+#        - Updates `.release-please-manifest.json` with the new version
+#
+#   3. When the maintainer merges the release PR, release-please:
+#        - Tags the merge commit (vX.Y.Z)
+#        - Creates a published GitHub release with the auto-generated
+#          notes (the same body that landed in CHANGELOG.md)
+#
+#   4. The tag push fires .github/workflows/release.yml — that
+#      workflow already handles a pre-existing release (gh release
+#      upload --clobber) so it just attaches signed assets to the
+#      release-please-created release. No coordination changes needed.
+#
+# Conventional-commit conventions (CONTRIBUTING.md has the long form):
+#   feat:    → minor bump (0.18.0 → 0.19.0). Adds Features section.
+#   fix:     → patch bump (0.18.0 → 0.18.1). Adds Bug Fixes section.
+#   feat!: / BREAKING CHANGE: → major bump. We're pre-1.0 so this is
+#                              still a minor bump per `bump-minor-pre-major`.
+#   docs:, ci:, refactor:, etc. → no version bump on their own, but
+#                              still appear in CHANGELOG sections.
+#
+# A note on PAT vs GITHUB_TOKEN:
+#
+#   release-please opens its release PR with the default GITHUB_TOKEN.
+#   GitHub's recursive-workflow guard means PRs created by GITHUB_TOKEN
+#   do NOT trigger pull_request workflows on the release PR. The
+#   maintainer can manually re-run CI from the PR page, or — if this
+#   becomes painful — swap to a fine-scoped PAT or a GitHub App token
+#   in `secrets.RELEASE_PLEASE_TOKEN`. Until then, the PR is small +
+#   visually reviewable so manual re-run is acceptable.
+
+name: release-please
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Top-level read-only per Scorecard Token-Permissions principle.
+# The release-please job opts in to write below.
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: Open or merge release PR
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: write       # commit version bumps + create the release tag + GitHub release
+      pull-requests: write  # open / update the release PR
+    steps:
+      # Reads release-please-config.json + .release-please-manifest.json
+      # from the repo root. v5.0.0 (2024-11-12) is current as of this
+      # PR; bump the SHA pin in lockstep with the trailing comment
+      # when upstream ships a stable v6 (`googleapis/release-please-action`
+      # follows the upstream `release-please` cadence).
+      - name: release-please
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

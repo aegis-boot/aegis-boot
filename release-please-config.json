@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "rust",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
+  "draft": false,
+  "prerelease": false,
+  "separate-pull-requests": false,
+  "changelog-path": "CHANGELOG.md",
+  "changelog-sections": [
+    { "type": "feat",     "section": "Features",            "hidden": false },
+    { "type": "fix",      "section": "Bug Fixes",           "hidden": false },
+    { "type": "perf",     "section": "Performance",         "hidden": false },
+    { "type": "refactor", "section": "Code Refactoring",    "hidden": false },
+    { "type": "docs",     "section": "Documentation",       "hidden": false },
+    { "type": "ci",       "section": "CI/CD",               "hidden": false },
+    { "type": "build",    "section": "Build System",        "hidden": false },
+    { "type": "test",     "section": "Tests",               "hidden": true  },
+    { "type": "chore",    "section": "Maintenance",         "hidden": true  },
+    { "type": "style",    "section": "Style",               "hidden": true  },
+    { "type": "revert",   "section": "Reverts",             "hidden": false }
+  ],
+  "packages": {
+    ".": {
+      "package-name": "aegis-boot",
+      "release-type": "rust",
+      "extra-files": [
+        "flake.nix",
+        "docs/INSTALL.md",
+        "docs/CLI.md",
+        "crates/iso-probe/Cargo.toml",
+        "crates/rescue-tui/Cargo.toml",
+        "crates/aegis-cli/Cargo.toml"
+      ]
+    }
+  }
+}
