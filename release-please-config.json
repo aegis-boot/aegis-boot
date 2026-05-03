@@ -8,6 +8,7 @@
   "draft": false,
   "prerelease": false,
   "separate-pull-requests": false,
+  "pull-request-title-pattern": "chore${scope}: release ${version}",
   "changelog-path": "CHANGELOG.md",
   "changelog-sections": [
     { "type": "feat",     "section": "Features",            "hidden": false },
@@ -24,7 +25,6 @@
   ],
   "packages": {
     ".": {
-      "package-name": "aegis-boot",
       "release-type": "simple",
       "extra-files": [
         "Cargo.toml",
