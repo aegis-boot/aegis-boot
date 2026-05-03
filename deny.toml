@@ -128,4 +128,13 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+allow-git = [
+    # aegis-catalog-data — sibling repo under the aegis-boot org. Holds
+    # the curated ISO catalog + vendor PGP keyring that aegis-boot
+    # consumes at build time. Internal-by-design (no external consumers,
+    # vendored PGP keys not appropriate for crates.io's deduplicated
+    # registry). Pinned by tag in crates/aegis-catalog/Cargo.toml so
+    # `cargo update` cannot silently advance to an unreviewed catalog.
+    # Decision history: aegis-boot#701.
+    "https://github.com/aegis-boot/aegis-catalog-data",
+]
