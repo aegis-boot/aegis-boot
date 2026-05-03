@@ -45,7 +45,7 @@
             # only git source we allow (see deny.toml [sources]); pinned by
             # tag in crates/aegis-catalog/Cargo.toml.
             outputHashes = {
-              "aegis-catalog-data-0.17.0" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+              "aegis-catalog-data-0.17.0" = "sha256-gwKVLO0BHrTcDWXl/DiecI5TLQnafhhpfb8AaR+BnB4=";
             };
           };
 
