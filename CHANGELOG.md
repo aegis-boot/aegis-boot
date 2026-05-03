@@ -4,6 +4,33 @@ All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-05-02
+
+Headline themes: the **#655 in-rescue ISO download epic** completed end-to-end (Phase 1A network primitives → Phase 2A `aegis-catalog` extract → Phase 2B `aegis-fetch` shared download + signed-chain verify → Phase 3 streaming/resume/cancel/ETA on top of rescue-tui's new Catalog screen + consent banner); the **#418 macOS `--direct-install` adapter** shipped behind the same four-stage pipeline shape Linux + Windows already use; the **#417/#421 ADR 0002 trust-anchor + runtime signed-chain downloader** landed in six PRs anchored on a new `aegis-trust` crate; the **#580 CI feedback-loop speedup** retired five standalone QEMU workflows in favour of `e2e-suite.yml`'s shared-build pattern; the **#701 aegis-catalog scaling** epic moved the curated ISO data + vendor PGP keyring out to a dedicated sibling repo so a catalog refresh no longer requires an aegis-boot release; the **Aurora theme** (#636) became the WCAG 3 / APCA-compliant default for rescue-tui; the operator UX picked up `--scan` retroactive sidecars, structured `--help` for `add`, NEXT ACTION lines on the flash failure paths, and `aegis-boot doctor` rows for TPM, UEFI/Legacy, NIC link state, SMART, full block-device inventory, and trust epoch state; **SLSA L2 build provenance** (#487) ships on every release; and the supply-chain hygiene pass pinned all 76 GitHub Actions refs to SHAs and dismissed the Token-Permissions Scorecard finding by narrowing release-workflow grants to per-job opt-in.
+
+### aegis-catalog scaling — extracted to dedicated repo (#701 Phases 1+2)
+
+The catalog data side (50+ vendor PGP keys, 20 → eventual 200 ISO entries, per-distro URL resolvers) churns on a different cadence than the API surface. Splitting them lets a catalog refresh ship without an aegis-boot release.
+
+- **Phase 1 (#702)** — `crates/aegis-catalog` becomes a thin re-export façade over a new `crates/aegis-catalog-data` crate inside the workspace. All public items still re-export through `aegis_catalog::*`; consumer crates (`aegis-fetch`, `aegis-cli`, `rescue-tui`) compile + test green without any import changes. Workspace test counts unchanged.
+- **Phase 2 (#703)** — `crates/aegis-catalog-data/` moved to its own repo at [`aegis-boot/aegis-catalog-data`](https://github.com/aegis-boot/aegis-catalog-data), tagged `v0.17.0`. Aegis-boot consumes via Cargo `git+tag` dep; bumping the `tag` value in `crates/aegis-catalog/Cargo.toml` is the only change needed for a catalog refresh. `cargo-deny` `allow-git` allowance + nix flake `cargoLock.outputHashes` pin land in the same PR. The `catalog-refresh.yml` cron is paused (workflow_dispatch-only) until Phase 3 ports the resolver tool to the new repo + restores the cron there.
+
+### Quick-look CLI demos above the fold (#348 Phase 2)
+
+Three asciinema-recorded SVGs embed at the top of `README.md`:
+
+- **`aegis-boot tour`** — 30-second walkthrough + the 4-command path to a working stick.
+- **`aegis-boot recommend`** — curated catalog of 20 known-good ISOs, each with its Secure Boot signing chain.
+- **`aegis-boot recommend ubuntu-24.04-live-server`** — drill-down on a single entry showing the verified-download recipe.
+
+These three are non-destructive and instant-load — recordable autonomously, no setup needed. The original three demos (`quickstart`, `init`, QEMU+OVMF rescue-tui) from #348 Phase 1 stay tracked as the deeper-dive demos pending real-hardware capture; both sets share the same `docs/demos/` harness shipped in PR #613.
+
+### Doc accuracy sweep — Rust toolchain version + Windows-ISO inconsistency
+
+- `BUILDING.md` and `README.md § Build environment` corrected to show the Rust pin as **1.95.0** (matches `Dockerfile.locked` + `rust-toolchain.toml`) with a note that the **MSRV stays 1.88** via `rust-version` in workspace `Cargo.toml`. The pre-existing text conflated the two.
+- `docs/HOW_IT_WORKS.md § What aegis-boot does` removed "Windows installer" from the example list of bootable ISO types — was contradicting the same doc's `What aegis-boot does NOT do` Windows-installer caveat (and the Quirk::NotKexecBootable gate enforced in code).
+- All version literals in `docs/INSTALL.md` + `docs/CLI.md` advanced from `0.17.0` → `0.18.0`. Doc-version drift-check (`scripts/check-doc-version.sh`) green.
+
 ### `MKUSB_TEST_MODE` env var bakes `aegis.test=<NAME>` into grub.cfg (closes #694)
 
 Aegis-hwsim's E5.3 / E5.4 / E6 scenarios depend on the rescue-tui test modes shipped in PRs #680 / #681 / #697. The harness side grep-pins the serial landmarks correctly, but a default-flashed stick doesn't carry `aegis.test=<NAME>` on the kernel cmdline — so the test mode never fires and the harness reports Skip.

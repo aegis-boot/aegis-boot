@@ -16,7 +16,7 @@ The build environment is **intentionally small**. The chosen runtime architectur
 
 | Layer                    | Purpose                                                  |
 | ------------------------ | -------------------------------------------------------- |
-| `Dockerfile.locked`      | Pinned Ubuntu 22.04 + Rust 1.88 + `cpio` + `sbsigntool`  |
+| `Dockerfile.locked`      | Pinned Ubuntu 22.04 + Rust 1.95.0 + `cpio` + `sbsigntool` |
 | `flake.nix`              | Nix flake for declarative dev shell                      |
 | Reproducible-build CI    | Two back-to-back builds; SHA-256 of `docker save` equal  |
 
@@ -45,7 +45,7 @@ cargo build --release
 | Component     | Version      | Pin Method                 |
 | ------------- | ------------ | -------------------------- |
 | Ubuntu base   | 22.04        | SHA-256 digest             |
-| Rust          | 1.88.0       | Exact version via rustup   |
+| Rust          | 1.95.0       | Exact version via rustup (matches `rust-toolchain.toml`; MSRV remains 1.88 via `rust-version` in `Cargo.toml`) |
 | build-essential | 12.9ubuntu3 | APT version pin           |
 | git           | 2.34.1       | APT version pin            |
 | cpio          | 2.13         | APT version pin            |
