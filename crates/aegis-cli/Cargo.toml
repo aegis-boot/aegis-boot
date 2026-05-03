@@ -71,23 +71,23 @@ serde_json = "1.0"
 # #556 PoC: shared utility helpers (short_hex, humanize_bytes) lifted
 # out of inventory.rs / attest.rs / catalog.rs so future ecosystem
 # crates have a DRY home for cross-cutting primitives.
-aegis-core = { path = "../aegis-core", version = "0.19.1" } # x-release-please-version
+aegis-core = { path = "../aegis-core", version = "0.19.2" } # x-release-please-version
 # Curated ISO catalog + per-distro URL resolvers extracted into a
 # shared crate (#655 Phase 2A) so rescue-tui can read the same data.
-aegis-catalog = { path = "../aegis-catalog", version = "0.19.1" } # x-release-please-version
+aegis-catalog = { path = "../aegis-catalog", version = "0.19.2" } # x-release-please-version
 # Shared download + signed-chain verification (#655 PR-C). Replaces
 # the curl + gpg + sha256sum shell-outs in `aegis-boot fetch` with
 # a single typed verify path against the embedded vendor keyring.
-aegis-fetch = { path = "../aegis-fetch", version = "0.19.1" } # x-release-please-version
-iso-probe = { path = "../iso-probe", version = "0.19.1" } # x-release-please-version
+aegis-fetch = { path = "../aegis-fetch", version = "0.19.2" } # x-release-please-version
+iso-probe = { path = "../iso-probe", version = "0.19.2" } # x-release-please-version
 # Signed attestation manifest types extracted for Phase 4a of #286.
 # This crate is the Rust + JSON Schema source of truth for the
 # on-disk aegis-boot-manifest.json wire format.
-aegis-wire-formats = { path = "../aegis-wire-formats", version = "0.19.1" } # x-release-please-version
+aegis-wire-formats = { path = "../aegis-wire-formats", version = "0.19.2" } # x-release-please-version
 # ADR 0002 trust anchor (#421). Consumed by `aegis-boot doctor` to
 # surface MIN_REQUIRED_EPOCH / seen-epoch drift; future: migrate the
 # attestation-manifest verify path off the bare minisign handle.
-aegis-trust = { path = "../aegis-trust", version = "0.19.1" } # x-release-please-version
+aegis-trust = { path = "../aegis-trust", version = "0.19.2" } # x-release-please-version
 # Atomic random-name temp files for write_sidecar_via_sudo's
 # stage-then-copy path. Use the runtime dep (not the dev-dep) so the
 # staging path is not predictable — closes the TOCTOU window semgrep

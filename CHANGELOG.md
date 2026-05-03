@@ -2,6 +2,13 @@
 
 All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.19.2](https://github.com/aegis-boot/aegis-boot/compare/v0.19.1...v0.19.2) (2026-05-03)
+
+
+### Bug Fixes
+
+* **rescue-tui:** inject nomodeset + pre-kexec forensic dump for casper boots (closes [#13](https://github.com/aegis-boot/aegis-boot/issues/13)) ([#739](https://github.com/aegis-boot/aegis-boot/issues/739)) ([b167f65](https://github.com/aegis-boot/aegis-boot/commit/b167f65281a3238273dcf346c7fccd0d32df29e1))
+
 ## [0.19.1](https://github.com/aegis-boot/aegis-boot/compare/v0.19.0...v0.19.1) (2026-05-03)
 
 
