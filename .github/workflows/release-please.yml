@@ -65,10 +65,14 @@ jobs:
   release-please:
     name: Open or merge release PR
     runs-on: ubuntu-22.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: write       # commit version bumps + create the release tag + GitHub release
       pull-requests: write  # open / update the release PR
+    outputs:
+      pr_number: ${{ steps.rp.outputs['--pr'] && fromJSON(steps.rp.outputs['--pr']).number || '' }}
+      pr_branch: ${{ steps.rp.outputs['--pr'] && fromJSON(steps.rp.outputs['--pr']).headBranchName || '' }}
+      release_created: ${{ steps.rp.outputs.release_created }}
     steps:
       # Reads release-please-config.json + .release-please-manifest.json
       # from the repo root. v5.0.0 (2024-11-12) is current as of this
@@ -76,7 +80,70 @@ jobs:
       # when upstream ships a stable v6 (`googleapis/release-please-action`
       # follows the upstream `release-please` cadence).
       - name: release-please
+        id: rp
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Two generated files need regen after release-please bumps the
+  # workspace version, and release-please can't generate either:
+  #
+  #   * Cargo.lock — bumped Cargo.toml means the lockfile's
+  #     workspace-member entries drift; CI's `--locked` cargo runs
+  #     fail with "cannot update the lock file because --locked was
+  #     passed". `cargo update --workspace` re-pins.
+  #
+  #   * docs/reference/CLI_SYNOPSIS.md — `cli-docgen` captures live
+  #     `aegis-boot <sub> --help` output. The bug-report footer +
+  #     fetch-image example commands embed CARGO_PKG_VERSION, so the
+  #     synopsis carries the bumped version verbatim. Drift-check
+  #     (CI's `Doc CLI subcommand drift-check`) fails otherwise.
+  #
+  # Both regenerated + committed + pushed to the release-please branch
+  # in this single job so the release PR's CI can pass.
+  refresh-generated-files:
+    name: Refresh Cargo.lock + CLI_SYNOPSIS.md on release PR
+    needs: release-please
+    if: needs.release-please.outputs.pr_branch != ''
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write       # push the regen commits to the release-please branch
+    steps:
+      - name: Checkout the release PR branch
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+        with:
+          ref: ${{ needs.release-please.outputs.pr_branch }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        with:
+          cache-on-failure: true
+
+      - name: Refresh Cargo.lock
+        run: cargo update --workspace
+
+      - name: Build aegis-boot binary (release) for cli-docgen subprocess capture
+        run: cargo build --release -p aegis-bootctl --bin aegis-boot
+
+      - name: Regenerate docs/reference/CLI_SYNOPSIS.md
+        run: cargo run -p aegis-bootctl --bin cli-docgen --features docgen -- --write
+
+      - name: Commit + push if changed
+        run: |
+          changes=()
+          if ! git diff --quiet Cargo.lock; then changes+=("Cargo.lock"); fi
+          if ! git diff --quiet docs/reference/CLI_SYNOPSIS.md; then changes+=("docs/reference/CLI_SYNOPSIS.md"); fi
+          if [ ${#changes[@]} -eq 0 ]; then
+            echo "All generated files already in sync — nothing to push"
+            exit 0
+          fi
+          git config user.name "release-please-bot[bot]"
+          git config user.email "release-please-bot@users.noreply.github.com"
+          git add "${changes[@]}"
+          git commit -m "ci: regen ${changes[*]} for release-please version bump"
+          git push origin "${{ needs.release-please.outputs.pr_branch }}"
