@@ -1753,6 +1753,19 @@ fn attempt_kexec(state: &mut AppState, idx: usize) {
         "invoking kexec_file_load"
     );
 
+    // Pre-kexec forensic dump: write the FINAL request (paths +
+    // enriched cmdline) to AEGIS_ISOS BEFORE handing off. Operator
+    // real-hardware report 2026-05-03 (post-#732): Ubuntu Server
+    // kexec succeeded but the new kernel went silent for 30+
+    // seconds, then the operator power-cycled. Without this dump,
+    // we have no record of what cmdline was actually passed —
+    // /run/aegis-rescue-tui.log is on tmpfs and gone after reboot,
+    // and the AEGIS_ISOS-side rescue-tui.log only reflects writes
+    // that flushed before the power button. Writing + sync'ing this
+    // file BEFORE load_and_exec gives every future post-mortem a
+    // ground-truth `kexec-attempt-<ts>.log` that survives.
+    persist_kexec_attempt(&iso.label, &req);
+
     // #127: post-kexec handoff banner. Print to stderr (which the
     // terminal still has when the TUI exits alt-screen) so the
     // operator isn't staring at a black screen wondering if the
@@ -1767,6 +1780,102 @@ fn attempt_kexec(state: &mut AppState, idx: usize) {
         Err(e) => {
             tracing::error!(error = %e, "kexec failed");
             state.record_kexec_error(&e);
+        }
+    }
+}
+
+/// Best-effort forensic dump of the pending kexec request to
+/// `AEGIS_ISOS`. Writes a single timestamped file with the ISO
+/// label, kernel/initrd paths, and final enriched cmdline, then
+/// sync's so the data is on physical media before `kexec_file_load`
+/// runs.
+///
+/// Failures are logged at WARN and otherwise ignored — this is a
+/// diagnostic, not a precondition. If the partition isn't mounted
+/// or is read-only, the kexec proceeds without the file.
+fn persist_kexec_attempt(label: &str, req: &kexec_loader::KexecRequest) {
+    use std::fmt::Write as FmtWrite;
+    use std::io::Write as IoWrite;
+
+    let dir = std::path::Path::new("/run/media/aegis-isos");
+    if !dir.is_dir() {
+        tracing::debug!("persist_kexec_attempt: AEGIS_ISOS not mounted; skipping forensic dump");
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let path = dir.join(format!("aegis-boot-{now}-kexec-attempt.log"));
+
+    let mut buf = String::new();
+    let _ = FmtWrite::write_fmt(
+        &mut buf,
+        format_args!("aegis-boot — pre-kexec forensic dump\n"),
+    );
+    let _ = FmtWrite::write_fmt(
+        &mut buf,
+        format_args!("version: {}\n", env!("CARGO_PKG_VERSION")),
+    );
+    let _ = FmtWrite::write_fmt(&mut buf, format_args!("unix_ts: {now}\n\n"));
+    let _ = FmtWrite::write_fmt(&mut buf, format_args!("label:   {label}\n"));
+    let _ = FmtWrite::write_fmt(
+        &mut buf,
+        format_args!("kernel:  {}\n", req.kernel.display()),
+    );
+    if let Some(ref initrd) = req.initrd {
+        let _ = FmtWrite::write_fmt(&mut buf, format_args!("initrd:  {}\n", initrd.display()));
+    } else {
+        buf.push_str("initrd:  (none)\n");
+    }
+    buf.push_str("\ncmdline (final, post-enrichment):\n");
+    let _ = FmtWrite::write_fmt(&mut buf, format_args!("  {}\n\n", req.cmdline));
+    buf.push_str("Read this file after a power-cycled boot to confirm\n");
+    buf.push_str("what cmdline rescue-tui actually passed to\n");
+    buf.push_str("kexec_file_load(2). If the kernel went silent or\n");
+    buf.push_str("stalled, this is the ground-truth handoff.\n");
+
+    // Use OpenOptions + write + sync_all to land the bytes on disk.
+    // sync_all() flushes both content + metadata for THIS file, which
+    // is the strongest guarantee a portable Rust process can give for
+    // its own write. To drain the partition-level write-back queue
+    // (#721 / exfat is async-by-default), then shell out to /bin/sync
+    // — busybox ships it; ignore failures since this is best-effort.
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            let write_result =
+                IoWrite::write_all(&mut f, buf.as_bytes()).and_then(|()| f.sync_all());
+            drop(f);
+            match write_result {
+                Ok(()) => {
+                    let _ = std::process::Command::new("/bin/sync")
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                    tracing::info!(
+                        path = %path.display(),
+                        "persist_kexec_attempt: forensic dump written + sync'd"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %path.display(),
+                        "persist_kexec_attempt: write/sync_all failed mid-flush"
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "persist_kexec_attempt: failed to open forensic dump file"
+            );
         }
     }
 }
