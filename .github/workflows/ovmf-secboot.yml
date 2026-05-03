@@ -46,6 +46,6 @@ jobs:
                 /usr/share/OVMF/OVMF_VARS_4M.ms.fd
 
       - name: Run OVMF SecBoot foundation smoke
-        env:
-          TIMEOUT_SECONDS: "30"
+        # TIMEOUT_SECONDS comes from scripts/lib/timeouts.sh
+        # ($OVMF_SECBOOT_SMOKE_TIMEOUT_DEFAULT = 30s).
         run: ./scripts/ovmf-secboot-smoke.sh

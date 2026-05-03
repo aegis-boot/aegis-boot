@@ -26,7 +26,9 @@ set -euo pipefail
 
 OVMF_CODE="${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.secboot.fd}"
 OVMF_VARS_SRC="${OVMF_VARS_SRC:-/usr/share/OVMF/OVMF_VARS_4M.ms.fd}"
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-30}"
+# shellcheck source=lib/timeouts.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/lib/timeouts.sh"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-$OVMF_SECBOOT_SMOKE_TIMEOUT_DEFAULT}"
 
 log() { printf '[ovmf-smoke] %s\n' "$*" >&2; }
 

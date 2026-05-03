@@ -206,13 +206,9 @@ jobs:
           ls -lh target/release/rescue-tui out/initramfs.cpio.gz
 
       - name: QEMU smoke boot
-        env:
-          # Bumped 90 → 180 in #727 (Phase 1 of #726): the maximalist
-          # driver-tree initramfs grew 18 MB → 54 MB compressed
-          # (~200 MB uncompressed). Kernel decompress on the 1-CPU
-          # GHA runner takes ~60-80 s by itself; old 90 s timeout
-          # left no headroom for /init + rescue-tui startup.
-          TIMEOUT_SECONDS: "180"
+        # TIMEOUT_SECONDS comes from scripts/lib/timeouts.sh
+        # ($QEMU_SMOKE_TIMEOUT_DEFAULT = 180s; bumped 90→180 in #727
+        # to handle the maximalist driver-tree initramfs decompress).
         run: ./scripts/qemu-smoke.sh
 
   # Phase 2c canary — kexec-e2e using the shared build artifacts.
@@ -261,8 +257,8 @@ jobs:
           ls -lh target/release/rescue-tui out/initramfs.cpio.gz
 
       - name: Run kexec E2E
-        env:
-          TIMEOUT_SECONDS: "180"
+        # TIMEOUT_SECONDS comes from scripts/lib/timeouts.sh
+        # ($QEMU_KEXEC_E2E_TIMEOUT_DEFAULT = 180s).
         run: sudo -E ./scripts/qemu-kexec-e2e.sh
 
   # Phase 2d canary — mkusb image build + SB-enforcing boot smoke using
@@ -316,9 +312,10 @@ jobs:
           sgdisk -p out/aegis-boot.img
 
       - name: Boot the image under OVMF SecBoot
-        env:
-          TIMEOUT_SECONDS: "120"
         run: |
+          # Timeout sourced from scripts/lib/timeouts.sh single source of truth (#733).
+          . ./scripts/lib/timeouts.sh
+          TIMEOUT_SECONDS="$OVMF_INLINE_BOOT_TIMEOUT_DEFAULT"
           cp /usr/share/OVMF/OVMF_VARS_4M.ms.fd /tmp/vars.fd
           chmod 0644 /tmp/vars.fd
           timeout "$TIMEOUT_SECONDS" qemu-system-x86_64 \
@@ -474,9 +471,10 @@ jobs:
           sudo umount /tmp/esp-direct-verify
 
       - name: Boot the direct-install image under OVMF SecBoot
-        env:
-          TIMEOUT_SECONDS: "120"
         run: |
+          # Timeout sourced from scripts/lib/timeouts.sh single source of truth (#733).
+          . ./scripts/lib/timeouts.sh
+          TIMEOUT_SECONDS="$OVMF_INLINE_BOOT_TIMEOUT_DEFAULT"
           sudo losetup -d "$(cat /tmp/direct-install.loop)" || true
           cp /usr/share/OVMF/OVMF_VARS_4M.ms.fd /tmp/vars.fd
           chmod 0644 /tmp/vars.fd
@@ -618,9 +616,10 @@ jobs:
             || { echo "doctor --stick missing manifest sequence row"; exit 1; }
 
       - name: Boot the rotated image under OVMF SecBoot
-        env:
-          TIMEOUT_SECONDS: "120"
         run: |
+          # Timeout sourced from scripts/lib/timeouts.sh single source of truth (#733).
+          . ./scripts/lib/timeouts.sh
+          TIMEOUT_SECONDS="$OVMF_INLINE_BOOT_TIMEOUT_DEFAULT"
           sudo losetup -d "$(cat /tmp/update-rotate.loop)" || true
           cp /usr/share/OVMF/OVMF_VARS_4M.ms.fd /tmp/vars.fd
           chmod 0644 /tmp/vars.fd
@@ -696,8 +695,8 @@ jobs:
           ls -lh target/release/rescue-tui out/initramfs.cpio.gz
 
       - name: Run OVMF SecBoot E2E
-        env:
-          TIMEOUT_SECONDS: "120"
+        # TIMEOUT_SECONDS comes from scripts/lib/timeouts.sh
+        # ($OVMF_SECBOOT_E2E_TIMEOUT_DEFAULT = 120s).
         run: ./scripts/ovmf-secboot-e2e.sh
 
   # Test-mode dispatcher verification (#698 follow-up).
@@ -751,7 +750,12 @@ jobs:
           chmod +x target/release/rescue-tui
 
       - name: Smoke ${{ matrix.mode }} dispatcher
+        # TIMEOUT_SECONDS sourced from scripts/lib/timeouts.sh: each
+        # dispatcher mode is one-shot — flip in, emit landmark, exit
+        # ($TEST_MODE_DISPATCHER_TIMEOUT_DEFAULT = 60s, deliberately
+        # tighter than the rescue-tui boot canary's 180s default).
         env:
           QEMU_SMOKE_TEST_MODE: ${{ matrix.mode }}
-          TIMEOUT_SECONDS: "60"
-        run: ./scripts/qemu-smoke.sh
+        run: |
+          . ./scripts/lib/timeouts.sh
+          TIMEOUT_SECONDS="$TEST_MODE_DISPATCHER_TIMEOUT_DEFAULT" ./scripts/qemu-smoke.sh
