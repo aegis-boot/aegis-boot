@@ -74,9 +74,10 @@ jobs:
         run: |
           size=$(stat -c '%s' out1/initramfs.cpio.gz)
           echo "initramfs size: $size bytes"
-          # 20 MB budget — matches the script's own check.
-          if [ "$size" -gt 20971520 ]; then
-            echo "size exceeds 20 MB budget"
+          # 64 MB budget — bumped from 20 MB in #726 Phase 1 (ship-the-
+          # curated-kitchen-sink driver-tree approach in build-initramfs.sh).
+          if [ "$size" -gt 67108864 ]; then
+            echo "size exceeds 64 MB budget"
             exit 1
           fi
 
