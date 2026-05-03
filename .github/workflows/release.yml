@@ -80,7 +80,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             busybox-static cpio \
             shim-signed grub-efi-amd64-signed linux-image-virtual \
-            mtools dosfstools exfatprogs gdisk
+            mtools dosfstools exfatprogs gdisk \
+            musl-tools
+          # musl-tools provides /usr/bin/musl-gcc, which ring's cc-rs
+          # build script needs when compiling for the
+          # x86_64-unknown-linux-musl target. Surfaces as soon as
+          # any transitive dep (rustls / aws-lc / etc.) pulls ring
+          # into the dependency graph — first hit was the v0.18.0
+          # release after #655's aegis-fetch + pgp deps merged.
           # Kernels ship mode 0600 on Ubuntu; mcopy needs them readable.
           # Conservative chmod across all matching files matches
           # mkusb.yml. Silenced errors for the case where one of the
