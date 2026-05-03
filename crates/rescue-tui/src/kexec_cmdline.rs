@@ -178,10 +178,7 @@ mod tests {
 /dev/sda9 /run/media/aegis exfat rw 0 0
 /dev/sda2 /run/media/aegis-isos exfat rw 0 0
 ";
-        let rel = partition_relative_path_with_mounts(
-            &p("/run/media/aegis-isos/x.iso"),
-            mounts,
-        );
+        let rel = partition_relative_path_with_mounts(&p("/run/media/aegis-isos/x.iso"), mounts);
         assert_eq!(rel.as_deref(), Some("/x.iso"));
     }
 
@@ -233,11 +230,9 @@ mod tests {
         // helper would require a test seam; instead, assert the
         // happy-path text construction directly via a synthetic path.
         let mounts = mounts_with_aegis_isos();
-        let rel = partition_relative_path_with_mounts(
-            &p("/run/media/aegis-isos/ubuntu.iso"),
-            &mounts,
-        )
-        .unwrap();
+        let rel =
+            partition_relative_path_with_mounts(&p("/run/media/aegis-isos/ubuntu.iso"), &mounts)
+                .unwrap();
         // Verify enrich would build the right token.
         let expected_arg = format!("iso-scan/filename={rel}");
         assert_eq!(expected_arg, "iso-scan/filename=/ubuntu.iso");
@@ -245,21 +240,31 @@ mod tests {
 
     #[test]
     fn enrich_skips_iso_scan_when_already_present() {
-        let base =
-            "boot=casper iso-scan/filename=/already-set.iso quiet";
-        let out = enrich_cmdline_for_kexec(base, Distribution::Debian, &p("/run/media/aegis-isos/x.iso"));
+        let base = "boot=casper iso-scan/filename=/already-set.iso quiet";
+        let out = enrich_cmdline_for_kexec(
+            base,
+            Distribution::Debian,
+            &p("/run/media/aegis-isos/x.iso"),
+        );
         // Should NOT contain a second iso-scan/filename token.
-        let count = out.split_whitespace()
+        let count = out
+            .split_whitespace()
             .filter(|t| t.starts_with("iso-scan/filename="))
             .count();
-        assert_eq!(count, 1, "iso-scan/filename should appear exactly once: {out}");
+        assert_eq!(
+            count, 1,
+            "iso-scan/filename should appear exactly once: {out}"
+        );
     }
 
     #[test]
     fn enrich_skips_iso_scan_for_non_debian_distros() {
         let base = "rd.live.image quiet";
-        let out =
-            enrich_cmdline_for_kexec(base, Distribution::Fedora, &p("/run/media/aegis-isos/fedora.iso"));
+        let out = enrich_cmdline_for_kexec(
+            base,
+            Distribution::Fedora,
+            &p("/run/media/aegis-isos/fedora.iso"),
+        );
         assert!(
             !out.contains("iso-scan/filename"),
             "iso-scan/filename is Debian-specific, not added for Fedora: {out}"
@@ -269,18 +274,25 @@ mod tests {
     #[test]
     fn enrich_adds_console_tty0_when_missing() {
         let base = "boot=casper quiet";
-        let out =
-            enrich_cmdline_for_kexec(base, Distribution::Debian, &p("/run/media/aegis-isos/x.iso"));
+        let out = enrich_cmdline_for_kexec(
+            base,
+            Distribution::Debian,
+            &p("/run/media/aegis-isos/x.iso"),
+        );
         assert!(out.contains("console=tty0"), "expected console=tty0: {out}");
     }
 
     #[test]
     fn enrich_skips_console_when_operator_set_one() {
         let base = "boot=casper console=ttyS0,115200 quiet";
-        let out =
-            enrich_cmdline_for_kexec(base, Distribution::Debian, &p("/run/media/aegis-isos/x.iso"));
+        let out = enrich_cmdline_for_kexec(
+            base,
+            Distribution::Debian,
+            &p("/run/media/aegis-isos/x.iso"),
+        );
         // Operator's console= wins; we don't add a second one.
-        let count = out.split_whitespace()
+        let count = out
+            .split_whitespace()
             .filter(|t| t.starts_with("console="))
             .count();
         assert_eq!(count, 1, "expected single console= token: {out}");
@@ -289,8 +301,16 @@ mod tests {
     #[test]
     fn enrich_is_idempotent_on_repeated_calls() {
         let base = "boot=casper";
-        let once = enrich_cmdline_for_kexec(base, Distribution::Debian, &p("/run/media/aegis-isos/x.iso"));
-        let twice = enrich_cmdline_for_kexec(&once, Distribution::Debian, &p("/run/media/aegis-isos/x.iso"));
+        let once = enrich_cmdline_for_kexec(
+            base,
+            Distribution::Debian,
+            &p("/run/media/aegis-isos/x.iso"),
+        );
+        let twice = enrich_cmdline_for_kexec(
+            &once,
+            Distribution::Debian,
+            &p("/run/media/aegis-isos/x.iso"),
+        );
         assert_eq!(once, twice, "enrich should be idempotent");
     }
 }
