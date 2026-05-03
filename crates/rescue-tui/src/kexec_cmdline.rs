@@ -11,7 +11,7 @@
 //! squashfs from inside. Our static iso-parser doesn't substitute
 //! the GRUB variable, so the arg gets dropped — casper boots blind.
 //!
-//! This module adds two enrichments to the cmdline before it's
+//! This module adds three enrichments to the cmdline before it's
 //! handed to `kexec_file_load`:
 //!
 //!   1. **`iso-scan/filename=<path>`** for casper-style ISOs
@@ -23,6 +23,24 @@
 //!      grub.cfg-in-ISO usually includes `quiet splash ---` with
 //!      no console hint; without one, the kexec'd kernel may print
 //!      to a serial port the operator can't see.
+//!
+//!   3. **`nomodeset`** for Debian distros if not already present.
+//!      Operator real-hardware report 2026-05-03 (post-#732):
+//!      kexec'ing Ubuntu Server on an AMD micro-PC printed the
+//!      handoff banner then went silent for 30+ seconds — the
+//!      kexec'd kernel WAS running (no kexec error returned), but
+//!      its dmesg never reached the framebuffer. Root cause: the
+//!      kernel's amdgpu driver init takes seconds to set up KMS
+//!      (kernel mode setting); during that window, all kernel
+//!      output queues to a buffer that flushes to the framebuffer
+//!      ONLY after KMS is up. If KMS hits a snag (firmware load,
+//!      hotplug race), the buffer never flushes — operator sees
+//!      a black screen. `nomodeset` skips KMS entirely; the kernel
+//!      uses basic VGA from boot, dmesg is visible immediately.
+//!      Trade-off: GPU acceleration is disabled in the booted
+//!      live system. Acceptable for live-installer use cases;
+//!      operator can remove `nomodeset` from the cmdline override
+//!      if they're booting on Intel/Nvidia and want acceleration.
 //!
 //! Other distros (Arch, Fedora, openSUSE, Alpine, NixOS) need
 //! their own per-distro injection — tracked as follow-up to #728.
@@ -65,6 +83,17 @@ pub fn enrich_cmdline_for_kexec(
             out.push(' ');
         }
         out.push_str("console=tty0");
+    }
+
+    // Force basic VGA + visible early dmesg for Debian distros that
+    // would otherwise queue output behind a KMS init that may never
+    // complete on operator-real-hardware. See module-doc #3 for
+    // rationale.
+    if distribution == Distribution::Debian && !cmdline_has_arg(&out, "nomodeset") {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str("nomodeset");
     }
 
     out
@@ -312,5 +341,51 @@ mod tests {
             &p("/run/media/aegis-isos/x.iso"),
         );
         assert_eq!(once, twice, "enrich should be idempotent");
+    }
+
+    // ---- nomodeset injection (post-#732 operator real-hardware fix) ----
+
+    #[test]
+    fn enrich_adds_nomodeset_for_debian() {
+        let base = "boot=casper";
+        let out = enrich_cmdline_for_kexec(
+            base,
+            Distribution::Debian,
+            &p("/run/media/aegis-isos/x.iso"),
+        );
+        assert!(
+            out.contains("nomodeset"),
+            "expected nomodeset for Debian: {out}"
+        );
+    }
+
+    #[test]
+    fn enrich_skips_nomodeset_when_already_present() {
+        let base = "boot=casper nomodeset";
+        let out = enrich_cmdline_for_kexec(
+            base,
+            Distribution::Debian,
+            &p("/run/media/aegis-isos/x.iso"),
+        );
+        let count = out.split_whitespace().filter(|t| *t == "nomodeset").count();
+        assert_eq!(count, 1, "nomodeset should appear exactly once: {out}");
+    }
+
+    #[test]
+    fn enrich_skips_nomodeset_for_non_debian_distros() {
+        // nomodeset is Debian-specific until per-distro AMD-GPU triage
+        // is done for Fedora/Arch/openSUSE (each has its own KMS
+        // semantics and may not have the same casper-style early-boot
+        // hang). Conservative: only inject where we have evidence.
+        let base = "rd.live.image";
+        let out = enrich_cmdline_for_kexec(
+            base,
+            Distribution::Fedora,
+            &p("/run/media/aegis-isos/fedora.iso"),
+        );
+        assert!(
+            !out.contains("nomodeset"),
+            "nomodeset is Debian-specific, not added for Fedora: {out}"
+        );
     }
 }
