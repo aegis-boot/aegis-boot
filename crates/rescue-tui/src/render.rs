@@ -1150,7 +1150,17 @@ fn draw_session_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         crate::state::TpmStatus::Available => state.theme.success,
         crate::state::TpmStatus::Absent => state.theme.warning,
     };
-    let brand = ratatui::style::Color::Rgb(0x3B, 0x82, 0xF6);
+    // Brand glyph color. Was a hard-coded `Color::Rgb(0x3B, 0x82, 0xF6)`
+    // (steel-blue) — but the Linux framebuffer console doesn't render
+    // 24-bit RGB escapes correctly, so the diamond glyph rendered as
+    // garbage on operator-real-hardware (#727 follow-up). Using
+    // `Color::Cyan` keeps the brand-y feel with a basic-ANSI color
+    // every terminal handles. Modern TTYs show it as their own cyan
+    // (Aurora-similar on dark backgrounds); fbcon shows it correctly
+    // as the standard 16-color cyan. Theme-aware would be a bigger
+    // refactor — Cyan as a non-overridable brand glyph color is the
+    // pragmatic call.
+    let brand = ratatui::style::Color::Cyan;
     let mut spans = vec![
         Span::styled(
             " ◆ ",

@@ -61,22 +61,96 @@ fn main() -> ExitCode {
 }
 
 fn tracing_subscriber_init() {
-    // systemd-journald captures stderr from services it runs, so stderr is
-    // the right destination even for "structured" output — the journal
-    // handles it. `AEGIS_LOG_JSON=1` switches to a machine-readable format
-    // suited to `journalctl --output=json`; the default stays human-readable.
+    // Where do logs go?
+    //
+    // systemd has journald and captures stderr-from-services for free,
+    // but the rescue env has no journald — stderr from rescue-tui goes
+    // straight to /dev/console = tty0 = the framebuffer console.
+    // ratatui draws on the same surface. Result on operator-real-
+    // hardware (post-#727 report): every `tracing::info!()` call wrote
+    // a line UNDERNEATH the TUI grid, ratatui's incremental redraw
+    // didn't repaint those cells (they were "outside" any drawn
+    // widget), and the screen rendered "chopped in pieces."
+    //
+    // Fix: when rescue-tui runs interactively (the common case — boot
+    // off the stick, talk to a human), tracing writes to a per-boot
+    // log FILE under `/run/aegis-rescue-tui.log`. Operator can recover
+    // it via the rescue shell (`cat /run/aegis-rescue-tui.log`) or by
+    // letting /init copy it to AEGIS_ISOS on shutdown (#721 already
+    // hardlinks /run logs).
+    //
+    // Non-interactive paths still log to stderr — none of them paint
+    // a TUI on the console, so there's no bleed-through risk:
+    //   * AEGIS_A11Y=text     — text-mode runs in a serial / screen-
+    //                           reader context where nothing else owns
+    //                           stderr; logs ARE the UI there.
+    //   * TERM=dumb           — same logic.
+    //   * AEGIS_AUTO_KEXEC    — non-interactive kexec mode (CI E2E,
+    //                           operator scripted boot). The TUI never
+    //                           starts; stderr → /dev/console is the
+    //                           only signal CI scripts can grep.
+    //                           kexec-e2e specifically greps for
+    //                           `AEGIS_AUTO_KEXEC: matched ISO` +
+    //                           `Mounted .* mount_fixture` from
+    //                           tracing — both must reach serial.
+    //   * AEGIS_TEST          — test_mode dispatcher (PR #680). Same
+    //                           shape as auto-kexec — non-interactive,
+    //                           CI greps stderr for landmarks.
+    //   * AEGIS_LOG_TO_STDERR — explicit operator override for tests.
+    //
+    // `AEGIS_LOG_JSON=1` keeps the same semantics: structured JSON
+    // when set, human-readable text when not.
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new("rescue_tui=info,iso_probe=info,kexec_loader=info")
     });
-    if std::env::var("AEGIS_LOG_JSON").is_ok() {
+
+    let force_stderr = std::env::var("AEGIS_LOG_TO_STDERR").is_ok()
+        || std::env::var("AEGIS_AUTO_KEXEC").is_ok()
+        || std::env::var("AEGIS_TEST").is_ok()
+        || std::env::var("AEGIS_A11Y").is_ok_and(|v| v.eq_ignore_ascii_case("text"))
+        || std::env::var("TERM").is_ok_and(|v| v == "dumb");
+
+    let json = std::env::var("AEGIS_LOG_JSON").is_ok();
+
+    if force_stderr {
+        if json {
+            let _ = tracing_subscriber::fmt()
+                .with_writer(io::stderr)
+                .with_env_filter(filter)
+                .json()
+                .try_init();
+        } else {
+            let _ = tracing_subscriber::fmt()
+                .with_writer(io::stderr)
+                .with_env_filter(filter)
+                .try_init();
+        }
+        return;
+    }
+
+    // Interactive path: open the per-boot log file. If it can't be
+    // opened (read-only fs, perm denied), fall back to /dev/null
+    // rather than stderr — the TUI surface is the priority.
+    let log_writer: Box<dyn std::io::Write + Send + 'static> = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/run/aegis-rescue-tui.log")
+    {
+        Ok(f) => Box::new(f),
+        Err(_) => Box::new(std::io::sink()),
+    };
+    let make_writer = std::sync::Mutex::new(log_writer);
+    if json {
         let _ = tracing_subscriber::fmt()
-            .with_writer(io::stderr)
+            .with_writer(make_writer)
+            .with_ansi(false)
             .with_env_filter(filter)
             .json()
             .try_init();
     } else {
         let _ = tracing_subscriber::fmt()
-            .with_writer(io::stderr)
+            .with_writer(make_writer)
+            .with_ansi(false)
             .with_env_filter(filter)
             .try_init();
     }
@@ -244,6 +318,20 @@ fn run(roots: &[PathBuf]) -> Result<u8, Box<dyn std::error::Error>> {
     if let Ok(name) = env::var("AEGIS_THEME") {
         state.theme = theme::Theme::from_name(&name);
         tracing::info!(theme = %name, "rescue-tui: theme override applied");
+    } else {
+        // Auto-detect a safe palette for the runtime terminal. Linux
+        // framebuffer / VT consoles can't render 24-bit RGB color
+        // escapes — Aurora's RGB palette renders as visible garbage
+        // on operator-real-hardware (post-#727 report). Falls back
+        // to the Aurora default for modern TTYs that DO support RGB.
+        let term = env::var("TERM").ok();
+        state.theme = theme::Theme::auto_detect_for_term(term.as_deref());
+        if state.theme != theme::Theme::default_theme() {
+            tracing::info!(
+                term = ?term,
+                "rescue-tui: theme auto-downgraded for terminal capabilities"
+            );
+        }
     }
     apply_persisted_choice(&mut state);
 

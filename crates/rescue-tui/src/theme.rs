@@ -143,6 +143,42 @@ impl Theme {
             _ => Self::default_theme(),
         }
     }
+
+    /// Auto-pick a theme based on the runtime terminal environment.
+    ///
+    /// Operator-real-hardware report 2026-05-03: rescue-tui rendered
+    /// on an AMD micro-PC's framebuffer console came up "chopped in
+    /// several pieces" — the operator had to guess their way through.
+    /// Root cause: ratatui's default render uses 24-bit RGB color
+    /// escapes (the Aurora palette) which the Linux framebuffer
+    /// console driver doesn't fully understand. The console emits
+    /// the escape sequence as visible text + the actual color stays
+    /// at default, garbling every styled span.
+    ///
+    /// This auto-detect picks a SAFE theme based on `TERM`:
+    ///
+    /// * `TERM=linux` (Linux framebuffer / VT console) → [`Self::ansi`]
+    ///   — basic 16-color ANSI palette, the only color set the Linux
+    ///   console driver renders correctly.
+    /// * `TERM=dumb` (serial / screen-reader / minimal terminal) →
+    ///   [`Self::monochrome`] — no color escapes at all. (The
+    ///   text-mode fallback in main.rs already short-circuits TERM=dumb
+    ///   before we get here, but layered defense is cheap.)
+    /// * Anything else (xterm-256color, etc.) → the WCAG 3 / APCA
+    ///   default. Modern TTYs render Aurora's RGB palette correctly
+    ///   + benefit from the contrast tuning.
+    ///
+    /// Operator's explicit `AEGIS_THEME=` env var still wins over
+    /// auto-detect — caller checks for the override before calling
+    /// this fn (see `main.rs` theme-init).
+    #[must_use]
+    pub fn auto_detect_for_term(term: Option<&str>) -> Self {
+        match term {
+            Some("linux") => Self::ansi(),
+            Some("dumb") => Self::monochrome(),
+            _ => Self::default_theme(),
+        }
+    }
 }
 
 impl Default for Theme {
@@ -154,6 +190,44 @@ impl Default for Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- auto_detect_for_term --------------------------------------
+
+    #[test]
+    fn auto_detect_picks_ansi_for_linux_console() {
+        // Linux framebuffer / VT console can't render 24-bit RGB
+        // escape sequences — must downgrade to basic ANSI.
+        assert_eq!(Theme::auto_detect_for_term(Some("linux")), Theme::ansi());
+    }
+
+    #[test]
+    fn auto_detect_picks_monochrome_for_dumb() {
+        // TERM=dumb usually means serial / screen-reader / CI captures
+        // — strip color escapes entirely.
+        assert_eq!(
+            Theme::auto_detect_for_term(Some("dumb")),
+            Theme::monochrome()
+        );
+    }
+
+    #[test]
+    fn auto_detect_picks_default_for_modern_terminals() {
+        // xterm / xterm-256color / kitty / etc. handle RGB fine — keep
+        // the WCAG 3 / APCA Aurora default.
+        for term in [
+            Some("xterm"),
+            Some("xterm-256color"),
+            Some("screen-256color"),
+            Some("kitty"),
+            None,
+        ] {
+            assert_eq!(
+                Theme::auto_detect_for_term(term),
+                Theme::default_theme(),
+                "expected Aurora default for TERM={term:?}"
+            );
+        }
+    }
 
     #[test]
     fn default_is_aurora_apca_palette() {
