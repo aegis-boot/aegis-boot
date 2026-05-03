@@ -21,7 +21,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/out}"
 KERNEL="${KERNEL:-}"
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-180}"
+# shellcheck source=lib/timeouts.sh
+. "$ROOT_DIR/scripts/lib/timeouts.sh"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-$QEMU_SMOKE_TIMEOUT_DEFAULT}"
 
 log() { printf '[qemu-smoke] %s\n' "$*" >&2; }
 

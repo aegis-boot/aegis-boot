@@ -87,8 +87,12 @@ rm -rf out
 step "5/8 mkusb"
 DISK_SIZE_MB="${DISK_SIZE_MB:-1024}" ./scripts/mkusb.sh
 
-step "6/8 qemu-try (headless, 60s timeout)"
-TIMEOUT_SECONDS=60 timeout 90 bash -c '
+step "6/8 qemu-try (headless, $OVMF_INLINE_BOOT_TIMEOUT_DEFAULT s timeout from scripts/lib/timeouts.sh)"
+# Source the central timeouts table so dev-test agrees with CI on how
+# long a SecBoot first-render takes. +30 s safety margin for the local
+# dev run vs CI runner overhead.
+. "$(dirname "$0")/lib/timeouts.sh"
+timeout "$((OVMF_INLINE_BOOT_TIMEOUT_DEFAULT + 30))" bash -c '
     cp /usr/share/OVMF/OVMF_VARS_4M.ms.fd /tmp/aegis-dev-vars.fd
     chmod 0644 /tmp/aegis-dev-vars.fd
     qemu-system-x86_64 -nographic -no-reboot \

@@ -20,7 +20,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/out}"
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-120}"
+# shellcheck source=lib/timeouts.sh
+. "$ROOT_DIR/scripts/lib/timeouts.sh"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-$OVMF_SECBOOT_E2E_TIMEOUT_DEFAULT}"
 
 OVMF_CODE="${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.secboot.fd}"
 OVMF_VARS_SRC="${OVMF_VARS_SRC:-/usr/share/OVMF/OVMF_VARS_4M.ms.fd}"
