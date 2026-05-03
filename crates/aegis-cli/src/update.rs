@@ -192,7 +192,7 @@ fn handle_eligible(
         print_rotation_plan(&diff);
         println!();
         #[cfg(target_os = "linux")]
-        return apply_rotation(dev, &esp_part, &diff, attestation_path);
+        return apply_rotation(dev, &esp_part, &diff);
         #[cfg(not(target_os = "linux"))]
         {
             println!(
@@ -1186,12 +1186,7 @@ pub(crate) fn attestation_dir() -> PathBuf {
 /// 5. On failure, invoke `execute_rollback` with the progress trace +
 ///    surface both the original error and any rollback errors.
 #[cfg(target_os = "linux")]
-fn apply_rotation(
-    dev: &Path,
-    part1_dev: &Path,
-    diff: &[EspFileDiff],
-    attestation_path: &Path,
-) -> Result<(), u8> {
+fn apply_rotation(dev: &Path, part1_dev: &Path, diff: &[EspFileDiff]) -> Result<(), u8> {
     use crate::update_apply::plan_rotation;
 
     let plan = plan_rotation(diff);
@@ -1214,12 +1209,14 @@ fn apply_rotation(
     );
     let rotation_result = dispatch_rotation(dev, part1_dev, &plan, &sources);
 
-    // On successful rotation: refresh the attestation manifest (both
-    // host-side + ESP-side copies). Failure warns but doesn't fail —
-    // the rotation already landed; a stale manifest causes
+    // On successful rotation: refresh the ESP-side attestation
+    // manifest at `::/aegis-boot-manifest.json` (the wire-format
+    // file, NOT the host-side `~/.local/share/.../<guid>-<ts>.json`
+    // — those are different schemas). Failure warns but doesn't
+    // fail — the rotation already landed; a stale manifest causes
     // `verify --stick` drift on rotated slots, which is recoverable.
     if rotation_result.is_ok()
-        && let Err(e) = refresh_manifest_after_rotate(attestation_path, part1_dev, &plan, &sources)
+        && let Err(e) = refresh_manifest_after_rotate(part1_dev, &plan, &sources)
     {
         eprintln!("warning: manifest refresh after rotation failed: {e}");
         eprintln!(
@@ -1230,23 +1227,63 @@ fn apply_rotation(
     rotation_result
 }
 
-/// Read the current attestation manifest, update `esp_files[]` entries
-/// for rotated slots with their new sha256 + size, bump `sequence`,
-/// update `tool_version`, and write the manifest back to both the
-/// host-side attestations dir AND the ESP's canonical
-/// `::/aegis-boot-manifest.json`. Linux-only.
+/// Read the on-ESP wire-format manifest at
+/// `::/aegis-boot-manifest.json` via `mtype`, update `esp_files[]`
+/// entries for rotated slots with their new sha256 + size, bump
+/// `sequence`, update `tool_version`, and write the manifest back
+/// via `mcopy`.
+///
+/// Sticks flashed before #386 (Phase 3b of #349) — and any stick
+/// flashed via plain `aegis-boot flash` instead of `--direct-install`
+/// — don't carry an ESP-side manifest. We detect "absent" via mtype
+/// stderr ("File ... not found") and treat it as a graceful skip
+/// rather than an error: the rotation succeeded; the operator can
+/// re-flash with `--direct-install` to get a fresh ESP-side
+/// manifest, or live with the missing file (no functional impact
+/// on boot — only on `verify --stick`'s drift report).
+///
+/// The host-side attestation at
+/// `~/.local/share/aegis-boot/attestations/<guid>-<ts>.json` is a
+/// SEPARATE schema (the `Attestation` struct in `attest.rs`, not
+/// the wire-format `Manifest` here) — it's a flash-time record,
+/// not a verifier input, so we deliberately don't touch it from
+/// the rotation path.
+///
+/// Linux-only.
 #[cfg(target_os = "linux")]
 fn refresh_manifest_after_rotate(
-    attestation_path: &Path,
     part1_dev: &Path,
     plan: &[crate::update_apply::RotationStep],
     sources: &crate::update_apply::RotationSources<'_>,
 ) -> Result<(), String> {
-    // 1. Read + parse existing manifest.
-    let body = std::fs::read_to_string(attestation_path)
-        .map_err(|e| format!("read {}: {e}", attestation_path.display()))?;
+    // 1. Read existing ESP-side manifest via mtype. Absent → graceful skip.
+    let dev_str = part1_dev.display().to_string();
+    let read_argv = crate::direct_install::build_mtype_argv(
+        &dev_str,
+        crate::direct_install_manifest::MANIFEST_ESP_PATH,
+    );
+    let read_argv_refs: Vec<&str> = read_argv.iter().map(String::as_str).collect();
+    let read_out = std::process::Command::new("sudo")
+        .args(&read_argv_refs)
+        .output()
+        .map_err(|e| format!("mtype exec: {e}"))?;
+    if !read_out.status.success() {
+        let stderr = String::from_utf8_lossy(&read_out.stderr);
+        // mtype prints "File "::/<path>" not found" to stderr when
+        // the file doesn't exist on the FAT image. That's the
+        // older-stick case — graceful skip, not error.
+        if stderr.contains("not found") {
+            println!(
+                "ESP-side manifest absent (stick predates #386 ESP-side attestation; rotation landed successfully without manifest refresh). Re-flash with `aegis-boot flash --direct-install` to enable manifest tracking on this stick."
+            );
+            return Ok(());
+        }
+        return Err(format!("mtype ESP manifest: {}", stderr.trim()));
+    }
+    let body = String::from_utf8(read_out.stdout)
+        .map_err(|e| format!("ESP manifest body not valid UTF-8: {e}"))?;
     let mut manifest: aegis_wire_formats::Manifest =
-        serde_json::from_str(&body).map_err(|e| format!("parse manifest: {e}"))?;
+        serde_json::from_str(&body).map_err(|e| format!("parse ESP manifest: {e}"))?;
 
     // 2. For each rotated step, find the matching EspFileEntry and
     //    update sha256 + size. Manifest paths are `::/`-prefixed;
@@ -1278,24 +1315,20 @@ fn refresh_manifest_after_rotate(
     manifest.sequence = manifest.sequence.saturating_add(1);
     manifest.tool_version = format!("aegis-boot {}", env!("CARGO_PKG_VERSION"));
 
-    // 4. Serialize + write both copies.
+    // 4. Serialize + write back to ESP via mcopy.
     let new_body =
         serde_json::to_string_pretty(&manifest).map_err(|e| format!("serialize manifest: {e}"))?;
-    std::fs::write(attestation_path, &new_body)
-        .map_err(|e| format!("write host-side {}: {e}", attestation_path.display()))?;
-
     let tmp =
         tempfile::NamedTempFile::new().map_err(|e| format!("tempfile for ESP manifest: {e}"))?;
     std::fs::write(tmp.path(), &new_body).map_err(|e| format!("stage ESP manifest body: {e}"))?;
-    let dev_str = part1_dev.display().to_string();
-    let argv = crate::direct_install::build_mcopy_argv(
+    let write_argv = crate::direct_install::build_mcopy_argv(
         &dev_str,
         tmp.path(),
         crate::direct_install_manifest::MANIFEST_ESP_PATH,
     );
-    let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let write_argv_refs: Vec<&str> = write_argv.iter().map(String::as_str).collect();
     let out = std::process::Command::new("sudo")
-        .args(&argv_refs)
+        .args(&write_argv_refs)
         .output()
         .map_err(|e| format!("mcopy exec: {e}"))?;
     if !out.status.success() {

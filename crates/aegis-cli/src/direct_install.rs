@@ -329,6 +329,27 @@ pub(crate) fn build_mcopy_argv(image_or_dev: &str, src: &Path, dest: &str) -> Ve
     ]
 }
 
+/// Build the argv for `mtype` — read a file from a FAT image to
+/// stdout. Used by the `aegis-boot update` manifest-refresh path
+/// (#181 follow-up) to read the on-ESP `aegis-boot-manifest.json`
+/// before bumping its sequence + writing it back via `mcopy`.
+///
+/// `--` separates flag parsing from positional args, same defense
+/// pattern as `build_mcopy_argv`. mtype's exit code is non-zero when
+/// the path doesn't exist on the image — callers distinguish "absent
+/// manifest" (older sticks predating the ESP-side manifest) from
+/// genuine read errors via stderr inspection rather than exit code
+/// alone.
+pub(crate) fn build_mtype_argv(image_or_dev: &str, src: &str) -> Vec<String> {
+    vec![
+        "mtype".to_string(),
+        "-i".to_string(),
+        image_or_dev.to_string(),
+        "--".to_string(),
+        src.to_string(),
+    ]
+}
+
 /// Build the argv for `mmd` — creates directories on a FAT image
 /// without failing if they already exist (via `-D s` = skip existing).
 pub(crate) fn build_mmd_argv(image_or_dev: &str, dirs: &[&str]) -> Vec<String> {
@@ -609,6 +630,25 @@ mod tests {
         let argv = build_mcopy_argv("/dev/sda1", Path::new("/tmp/x"), "::/x");
         let d_idx = argv.iter().position(|a| a == "-D").expect("-D flag");
         assert_eq!(argv.get(d_idx + 1).map(String::as_str), Some("o"));
+    }
+
+    #[test]
+    fn build_mtype_argv_starts_with_mtype_and_minus_i() {
+        let argv = build_mtype_argv(
+            "/dev/sda1",
+            crate::direct_install_manifest::MANIFEST_ESP_PATH,
+        );
+        assert_eq!(argv.first().map(String::as_str), Some("mtype"));
+        assert_eq!(argv.get(1).map(String::as_str), Some("-i"));
+        assert_eq!(argv.get(2).map(String::as_str), Some("/dev/sda1"));
+    }
+
+    #[test]
+    fn build_mtype_argv_inserts_double_dash_before_positional() {
+        let argv = build_mtype_argv("/dev/sda1", "::/-rogue");
+        let dd_idx = argv.iter().position(|a| a == "--").expect("-- delimiter");
+        let src_idx = argv.iter().position(|a| a == "::/-rogue").expect("src");
+        assert!(dd_idx < src_idx, "`--` must precede the src path: {argv:?}");
     }
 
     #[test]
