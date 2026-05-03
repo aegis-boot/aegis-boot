@@ -796,7 +796,56 @@ fi
     /bin/ls /lib/modules/ 2>/dev/null
     /bin/echo ""
     /bin/echo "=== dmesg tail ==="
-    /bin/dmesg 2>/dev/null | /bin/tail -40 2>/dev/null || /bin/echo "(dmesg not accessible)"
+    # Try the dmesg cmd first (works most places). Fall back to a
+    # nonblocking dd of /dev/kmsg if dmesg returns nothing — some
+    # kernels CAP_SYSLOG-restrict dmesg even from PID 1, but
+    # /dev/kmsg stays readable. Capture each separately so the log
+    # tells us WHICH path produced output.
+    _dmesg_out=$(/bin/dmesg 2>&1)
+    if [ -n "$_dmesg_out" ]; then
+        /bin/echo "$_dmesg_out" | /bin/tail -200
+    else
+        /bin/echo "(dmesg cmd produced no output — falling back to /dev/kmsg)"
+        /bin/dd if=/dev/kmsg of=/dev/stdout iflag=nonblock 2>/dev/null | /bin/head -200 \
+            || /bin/echo "(/dev/kmsg also unreadable)"
+    fi
+    /bin/echo ""
+    # (#717 follow-up: USB/HID enumeration audit) — what the kernel
+    # actually saw + what we modprobed + which input devices showed up.
+    # Without these the operator-facing "keyboard frozen in TUI" report
+    # has no way to distinguish "module didn't load" / "device didn't
+    # enumerate" / "input event never reached the TUI".
+    /bin/echo "=== lsmod (post-modprobe) ==="
+    if [ -x /sbin/lsmod ] || [ -x /usr/sbin/lsmod ]; then
+        /sbin/lsmod 2>/dev/null || /usr/sbin/lsmod 2>/dev/null
+    else
+        # Busybox doesn't ship lsmod by default; /proc/modules has the
+        # raw form `<name> <size> <refcount> <deps> <state> <addr>`.
+        /bin/cat /proc/modules 2>/dev/null | /bin/sort
+    fi
+    /bin/echo ""
+    /bin/echo "=== /dev/input (input devices the kernel exposed) ==="
+    /bin/ls -la /dev/input/ 2>/dev/null || /bin/echo "(no /dev/input)"
+    /bin/echo ""
+    /bin/echo "=== /sys/class/input/ (with names) ==="
+    for _d in /sys/class/input/event* /sys/class/input/mouse* /sys/class/input/input*; do
+        [ -e "$_d" ] || continue
+        _basename=$(/bin/basename "$_d")
+        # Per-input device name comes from `device/name` for event
+        # nodes, `name` for input nodes. Try both; missing is fine.
+        _name=$(/bin/cat "$_d/device/name" 2>/dev/null || /bin/cat "$_d/name" 2>/dev/null)
+        /bin/echo "  $_basename: ${_name:-?}"
+    done
+    /bin/echo ""
+    /bin/echo "=== /sys/bus/usb/devices (USB topology) ==="
+    for _d in /sys/bus/usb/devices/*; do
+        [ -e "$_d/idVendor" ] || continue
+        _vid=$(/bin/cat "$_d/idVendor" 2>/dev/null)
+        _pid=$(/bin/cat "$_d/idProduct" 2>/dev/null)
+        _mfg=$(/bin/cat "$_d/manufacturer" 2>/dev/null)
+        _prod=$(/bin/cat "$_d/product" 2>/dev/null)
+        /bin/echo "  ${_d##*/}: ${_vid}:${_pid} ${_mfg:-?} ${_prod:-?}"
+    done
 } >> "$INIT_LOG" 2>&1
 
 # Copy the snapshot to AEGIS_ISOS so it survives a reboot. Best-
@@ -841,19 +890,91 @@ for arg in $(/bin/cat /proc/cmdline 2>/dev/null); do
     esac
 done
 
+# Verbose-by-default rescue-tui logging while we work through the
+# real-hardware diagnostic gap (USB-HID input + render artifacting on
+# AMD micro-PC, reported 2026-05-03). RUST_LOG honors any operator-
+# set value first; otherwise we crank to trace on the rescue-tui
+# crates so the persisted stderr capture below carries the full
+# event stream. Once the diagnostic gap closes we'll dial this back
+# to the original `rescue_tui=info` default.
+if [ -z "${RUST_LOG:-}" ]; then
+    export RUST_LOG="rescue_tui=trace,iso_probe=debug,kexec_loader=debug,aegis_fetch=info,info"
+fi
+
+# Persist rescue-tui stderr to AEGIS_ISOS so the operator-reported
+# "screen full of artifacts, dialogs sort of worked, typing 'boot'
+# did nothing" symptoms (2026-05-03) leave a forensic trail. Without
+# this redirect, rescue-tui's tracing output goes to the framebuffer
+# console — visible during the boot but lost the moment ratatui
+# takes the alternate screen + the operator power-cycles.
+#
+# Best-effort: if AEGIS_ISOS isn't writable we fall back to /tmp so
+# the file at least exists in tmpfs (gone after reboot, but readable
+# via the emergency shell).
+RESCUE_TUI_LOG=""
+if [ -d /run/media/aegis-isos ] && [ -w /run/media/aegis-isos ]; then
+    RESCUE_TUI_LOG="/run/media/aegis-isos/aegis-boot-${_ts:-boot}-rescue-tui.log"
+elif [ -d /tmp ]; then
+    RESCUE_TUI_LOG="/tmp/aegis-boot-rescue-tui.log"
+fi
+if [ -n "$RESCUE_TUI_LOG" ]; then
+    /bin/echo "init: rescue-tui stderr → $RESCUE_TUI_LOG (RUST_LOG=$RUST_LOG)"
+fi
+
 # Hand off. Exit code semantics (#90):
 #   0        — operator chose Quit → drop to emergency shell (old default)
 #   42       — operator chose the rescue-shell entry explicitly
 #   anything — crash / unclean exit → emergency shell
 # All paths land in /bin/sh; the different branches only differ in the
 # banner so an operator reading the serial log can tell which happened.
-/usr/bin/rescue-tui
-rc=$?
+#
+# Tee discipline: rescue-tui's stderr must land in BOTH the persistent
+# log file AND on the original console (where the e2e QEMU canaries
+# grep for "aegis-boot rescue-tui starting"). A naive
+# `2>"$RESCUE_TUI_LOG"` redirect lands it in the file only — the
+# canaries time out waiting for the marker. Busybox sh doesn't have
+# process substitution (`>(...)`) so we do it via a named pipe +
+# background tee. The tee inherits fd 2 (= console) from the script,
+# so writing to file + fd 2 forks the stream.
+TUI_FIFO=""
+TEE_PID=""
+if [ -n "$RESCUE_TUI_LOG" ]; then
+    TUI_FIFO="/tmp/aegis-tui-stderr-fifo"
+    /bin/mkfifo "$TUI_FIFO" 2>/dev/null || TUI_FIFO=""
+fi
+if [ -n "$TUI_FIFO" ]; then
+    /bin/tee "$RESCUE_TUI_LOG" < "$TUI_FIFO" >&2 &
+    TEE_PID=$!
+    /usr/bin/rescue-tui 2>"$TUI_FIFO"
+    rc=$?
+    /bin/wait "$TEE_PID" 2>/dev/null
+    /bin/rm -f "$TUI_FIFO"
+else
+    # Fallback: no fifo (mkfifo unavailable, or RESCUE_TUI_LOG
+    # unset). Run rescue-tui without persisting stderr — the
+    # console-only path matches v0.18 behavior.
+    /usr/bin/rescue-tui
+    rc=$?
+fi
 case "$rc" in
     0)   /bin/echo "init: rescue-tui quit cleanly; dropping to emergency shell" ;;
     42)  /bin/echo "init: rescue shell requested by operator (#90)" ;;
     *)   /bin/echo "init: rescue-tui exited unexpectedly (rc=$rc); dropping to emergency shell" ;;
 esac
+# Persist rc + a tail of the captured stderr so the post-boot operator
+# (or me, on a future stick inspection) can see the exit cause without
+# re-rebooting. Best-effort, doesn't fail the init.
+if [ -n "$RESCUE_TUI_LOG" ] && [ -d /run/media/aegis-isos ] && [ -w /run/media/aegis-isos ]; then
+    _exit_log="/run/media/aegis-isos/aegis-boot-${_ts:-boot}-rescue-tui-exit.log"
+    {
+        /bin/echo "rescue-tui exited rc=$rc"
+        /bin/echo "stderr capture path: $RESCUE_TUI_LOG"
+        /bin/echo ""
+        /bin/echo "=== last 80 lines of stderr ==="
+        /bin/tail -80 "$RESCUE_TUI_LOG" 2>/dev/null || /bin/echo "(stderr file unreadable)"
+    } > "$_exit_log" 2>/dev/null && \
+        /bin/echo "init: rescue-tui exit summary → $_exit_log"
+fi
 exec /bin/sh
 INIT_SH
 chmod 0755 "$STAGE_DIR/init"
