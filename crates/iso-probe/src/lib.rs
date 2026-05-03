@@ -344,6 +344,22 @@ fn find_iso_size(root: &Path, filename: &str) -> Option<u64> {
 /// of the file (so a 3 GB ISO emits ~8 progress ticks ≈ every 12 s on
 /// USB 2.0). Cheap; no impact on hash throughput.
 fn verify_iso_hash_with_console_progress(iso_path: &Path) -> HashVerification {
+    // Lazy-hash escape hatch (operator-set, real-hardware UX request
+    // 2026-05-03): hashing 3 GB on USB 2.0 takes ~90 s of blank
+    // screen before the TUI alt-screen takeover. With AEGIS_LAZY_HASH
+    // set, discover() returns NotPresent for every ISO + the operator
+    // verifies on demand via the `v` key (existing #548 feature).
+    // Trade-off: no proactive verdict colors at TUI startup; operator
+    // explicitly opts into verification per-ISO. /init exports this
+    // by default for snappy startup; operators or environments that
+    // want eager hashing can `unset AEGIS_LAZY_HASH` before exec.
+    if std::env::var_os("AEGIS_LAZY_HASH").is_some() {
+        tracing::info!(
+            iso = %iso_path.display(),
+            "iso-probe: skipping eager hash (AEGIS_LAZY_HASH set — operator must press 'v' to verify)"
+        );
+        return HashVerification::NotPresent;
+    }
     let total_bytes = std::fs::metadata(iso_path).map_or(0, |m| m.len());
     let total_mib = total_bytes / (1024 * 1024);
     tracing::info!(
