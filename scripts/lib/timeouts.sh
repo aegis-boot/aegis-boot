@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # shellcheck shell=sh
 # shellcheck disable=SC2034
-# (each constant is exported for consumers that source this file —
-# shellcheck can't see the cross-file usage from here.)
+# (Constants are consumed by sibling scripts that source this file;
+# the linter cannot see those references from here, so SC2034
+# "apparently unused" fires falsely. Suppression is correct.)
 #
 # Named QEMU / boot-smoke timeout constants — single source of truth
 # for both shell scripts and CI workflows. Source this file from
