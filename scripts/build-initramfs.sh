@@ -277,6 +277,78 @@ if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
         "$MOD_DEST/kernel/drivers/usb/storage" \
         "uas" "CONFIG_USB_UAS"
 
+    # USB HID — keyboards + mice. Without these, the rescue-tui boots
+    # but operator input is dead silence; the only way out is power-
+    # cycling. Reported on real hardware against an AMD micro-PC with
+    # a USB keyboard. Three modules suffice for ~95% of USB input
+    # devices: `hid` (core HID layer), `usbhid` (USB transport for
+    # HID reports), `hid-generic` (catch-all driver for any HID device
+    # without a vendor-specific quirk module). Apple / Logitech-
+    # wireless / multi-touch quirk drivers are not shipped here —
+    # they're tracked as a follow-up since each adds size and most
+    # rescue scenarios use a plain USB keyboard.
+    try_module "kernel/drivers/hid/hid" \
+        "$MOD_DEST/kernel/drivers/hid" \
+        "hid" "CONFIG_HID"
+    try_module "kernel/drivers/hid/usbhid/usbhid" \
+        "$MOD_DEST/kernel/drivers/hid/usbhid" \
+        "usbhid" "CONFIG_USB_HID"
+    try_module "kernel/drivers/hid/hid-generic" \
+        "$MOD_DEST/kernel/drivers/hid" \
+        "hid-generic" "CONFIG_HID_GENERIC"
+    # HID vendor-specific quirk drivers — `hid-generic` covers the
+    # plain-vanilla-USB-keyboard case but several common families need
+    # a quirk driver to expose all keys / scroll behavior / etc:
+    #   * Logitech Unifying / Bolt receivers (hid-logitech +
+    #     hid-logitech-hidpp + hid-logitech-dj — the hidpp variant
+    #     handles HID++ protocol used by Master/MX series; -dj drives
+    #     the receiver bus enumeration)
+    #   * Microsoft keyboards (Sculpt, All-in-One, etc.) — the
+    #     -microsoft quirks expose the F-key media keys correctly
+    #   * Apple keyboards (operators bring these to PC rescue work
+    #     more often than you'd expect)
+    #   * Multi-touch (touchscreens on modern all-in-ones / convertible
+    #     laptops booted into rescue mode)
+    try_module "kernel/drivers/hid/hid-logitech" \
+        "$MOD_DEST/kernel/drivers/hid" \
+        "hid-logitech" "CONFIG_HID_LOGITECH"
+    try_module "kernel/drivers/hid/hid-logitech-hidpp" \
+        "$MOD_DEST/kernel/drivers/hid" \
+        "hid-logitech-hidpp" "CONFIG_HID_LOGITECH_HIDPP"
+    try_module "kernel/drivers/hid/hid-logitech-dj" \
+        "$MOD_DEST/kernel/drivers/hid" \
+        "hid-logitech-dj" "CONFIG_HID_LOGITECH_DJ"
+    try_module "kernel/drivers/hid/hid-microsoft" \
+        "$MOD_DEST/kernel/drivers/hid" \
+        "hid-microsoft" "CONFIG_HID_MICROSOFT"
+    try_module "kernel/drivers/hid/hid-apple" \
+        "$MOD_DEST/kernel/drivers/hid" \
+        "hid-apple" "CONFIG_HID_APPLE"
+    try_module "kernel/drivers/hid/hid-multitouch" \
+        "$MOD_DEST/kernel/drivers/hid" \
+        "hid-multitouch" "CONFIG_HID_MULTITOUCH"
+
+    # SD/MMC card readers — many laptops + dev boards use these as a
+    # secondary boot/rescue path. sdhci-pci covers the standard host
+    # controller; sdhci-acpi covers the ACPI-enumerated variant on
+    # newer Intel platforms. mmc_core + mmc_block are usually built
+    # into stock distro kernels (CONFIG_MMC=y) but we ship the host
+    # controllers anyway since they're loadable.
+    try_module "kernel/drivers/mmc/host/sdhci-pci" \
+        "$MOD_DEST/kernel/drivers/mmc/host" \
+        "sdhci-pci" "CONFIG_MMC_SDHCI_PCI"
+    try_module "kernel/drivers/mmc/host/sdhci-acpi" \
+        "$MOD_DEST/kernel/drivers/mmc/host" \
+        "sdhci-acpi" "CONFIG_MMC_SDHCI_ACPI"
+
+    # NTFS read support — operators sometimes flash the .img onto
+    # an existing NTFS-formatted thumb drive or have ISOs on an
+    # NTFS-mounted secondary drive. ntfs3 is the in-tree driver
+    # (kernel ≥ 5.15); read-only mount is enough for our use case.
+    try_module "kernel/fs/ntfs3/ntfs3" \
+        "$MOD_DEST/kernel/fs/ntfs3" \
+        "ntfs3" "CONFIG_NTFS3_FS"
+
     # --- network drivers (#655 Phase 1A) -------------------------------
     # Wired Ethernet only — Phase 4 of #655 will add Wi-Fi (firmware
     # blobs make it a separate epic). These cover the QEMU smoke
@@ -295,6 +367,13 @@ if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
     try_module "kernel/drivers/net/ethernet/intel/igb/igb" \
         "$MOD_DEST/kernel/drivers/net/ethernet/intel/igb" \
         "igb" "CONFIG_IGB"
+    # Intel I225/I226 2.5GbE — common on modern motherboards (most
+    # AM5/LGA1700 boards 2022+). Distinct from igb (1GbE family);
+    # operators on newer hardware were silently NIC-less without
+    # this.
+    try_module "kernel/drivers/net/ethernet/intel/igc/igc" \
+        "$MOD_DEST/kernel/drivers/net/ethernet/intel/igc" \
+        "igc" "CONFIG_IGC"
     try_module "kernel/drivers/net/ethernet/realtek/r8169" \
         "$MOD_DEST/kernel/drivers/net/ethernet/realtek" \
         "r8169" "CONFIG_R8169"
@@ -557,6 +636,10 @@ for m in scsi_mod sd_mod \
          nvme-core nvme \
          usbcore usb-common xhci-hcd xhci-pci ehci-hcd ehci-pci \
          usb-storage uas \
+         hid usbhid hid-generic \
+         hid-logitech hid-logitech-hidpp hid-logitech-dj \
+         hid-microsoft hid-apple hid-multitouch \
+         sdhci-pci sdhci-acpi ntfs3 \
          nls_utf8 nls_cp437 nls_iso8859-1 \
          loop isofs udf exfat; do
     /bin/modprobe "$m" 2>/dev/null || true
@@ -568,7 +651,7 @@ done
 # them. virtio_net first since it's the QEMU happy path.
 for m in mii usbnet \
          virtio_net \
-         e1000 e1000e igb r8169 8139too tg3 \
+         e1000 e1000e igb igc r8169 8139too tg3 \
          asix ax88179_178a cdc_ether r8152; do
     /bin/modprobe "$m" 2>/dev/null || true
 done
