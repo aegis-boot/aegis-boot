@@ -27,6 +27,7 @@
 
 pub mod docgen;
 pub mod failure_log;
+pub mod kexec_cmdline;
 pub mod keybindings;
 pub mod network;
 pub mod persistence;
