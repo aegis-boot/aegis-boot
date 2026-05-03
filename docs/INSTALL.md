@@ -131,7 +131,7 @@ The flake pins to `nixos-unstable`; downgrade to a specific channel in your own 
 Sanity check:
 
 ```bash
-aegis-boot --version       # → aegis-boot v0.19.2  # x-release-please-version
+aegis-boot --version       # → aegis-boot v0.19.3  # x-release-please-version
 aegis-boot doctor          # 0–100 health score for host + stick
 ```
 
