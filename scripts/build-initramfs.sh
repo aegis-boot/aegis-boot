@@ -813,16 +813,15 @@ done
 # effort; failures are silent because most devices map to a module
 # we don't ship (or to nothing — modaliases for builtin kernel
 # subsystems return ENOENT from modprobe).
-/bin/echo "init: modalias coldplug — auto-loading drivers for connected hardware"
-_coldplug_count=0
-for f in $(/bin/find /sys/devices -name modalias 2>/dev/null); do
-    alias=$(/bin/cat "$f" 2>/dev/null)
-    [ -n "$alias" ] || continue
-    if /bin/modprobe -q "$alias" 2>/dev/null; then
-        _coldplug_count=$((_coldplug_count + 1))
-    fi
-done
-/bin/echo "init: coldplug loaded $_coldplug_count driver(s) by modalias match"
+# Modalias coldplug is DEFERRED to after the snapshot+cp+checkpoint
+# block lower down. Real-hardware boot 2026-05-03 06:16: when this
+# loop ran HERE (before the snapshot block), it stalled on modprobe
+# calls long enough that the operator power-cycled before /init's
+# cp-init-log-to-AEGIS_ISOS step ran — leaving 0-byte forensic logs.
+# Moving coldplug to AFTER the snapshot guarantees we capture
+# diagnostics regardless of how long coldplug takes; if coldplug
+# itself stalls, the operator can still post-mortem from the
+# snapshot. See coldplug_modaliases() invocation below the snapshot.
 
 # (#655 Phase 1A) Network drivers — modprobe at boot but DON'T trigger
 # DHCP. Operator opts in via rescue-tui (Phase 1B) or the emergency
@@ -1063,6 +1062,40 @@ checkpoint() {
     fi
 }
 checkpoint "snapshot-flushed"
+
+# Modalias coldplug — DEFERRED here from the original location after
+# the modprobe loop, so even if coldplug stalls (real-hardware boot
+# 2026-05-03 06:16: total /init time ballooned past the operator's
+# patience window before the snapshot got cp'd), the snapshot is
+# already on disk by this point.
+#
+# Scope-limited to /sys/bus/{pci,usb,platform,virtio}/devices to
+# avoid walking the kernel-internal device tree (~5000 entries on a
+# typical desktop). Those buses cover every meaningful hardware
+# class without the modprobe storm of the full /sys/devices walk.
+#
+# Bounded execution: stream from find via while-read (avoid
+# materializing the whole list in shell) + a hard 30 s upper bound
+# via SECONDS comparison. If we hit the bound mid-walk, we stop +
+# log the partial count + continue. The explicit modprobe loop above
+# already covers the core devices; coldplug is for the long tail.
+/bin/echo "init: modalias coldplug — auto-loading drivers for connected hardware (≤30s bound)"
+_coldplug_count=0
+_coldplug_started=$SECONDS
+for bus in pci usb platform virtio; do
+    [ -d "/sys/bus/$bus/devices" ] || continue
+    /bin/find "/sys/bus/$bus/devices" -name modalias 2>/dev/null | while IFS= read -r f; do
+        if [ $((SECONDS - _coldplug_started)) -ge 30 ]; then
+            /bin/echo "init: coldplug HIT 30s BOUND — proceeding with partial fan-out"
+            break 2
+        fi
+        alias=$(/bin/cat "$f" 2>/dev/null)
+        [ -n "$alias" ] || continue
+        /bin/modprobe -q "$alias" 2>/dev/null && _coldplug_count=$((_coldplug_count + 1)) || true
+    done
+done
+/bin/echo "init: coldplug loaded $_coldplug_count driver(s) by modalias match in $((SECONDS - _coldplug_started))s"
+checkpoint "coldplug-done count=$_coldplug_count"
 
 # Verbose-pause: if the kernel cmdline has aegis.verbose=1, pause
 # for 30s (or until Enter) so the operator can read the pre-TUI
