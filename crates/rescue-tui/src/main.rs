@@ -284,10 +284,27 @@ fn run(roots: &[PathBuf]) -> Result<u8, Box<dyn std::error::Error>> {
     let counted_but_not_attempted = on_disk_iso_count.saturating_sub(isos.len() + failed.len());
     let skipped = failed.len() + counted_but_not_attempted;
     persist_tier_b_log(&failed);
-    // Startup banner to stderr — mirrored via tracing::info! so structured
-    // consumers (journald, CI smoke greps) see the same signal as humans
-    // reading the serial console directly.
-    eprintln!(
+    // Startup banner via println! (fd 1), NOT eprintln! (fd 2).
+    //
+    // /init runs us as `/usr/bin/rescue-tui 2>"$TUI_FIFO"` — fd 2
+    // goes through a fifo + background tee that fans out to the
+    // log file AND back to /dev/console at tee's leisure. Three
+    // lines below we issue crossterm Clear (which writes directly
+    // to fd 1 = /dev/console). When the banner used eprintln, the
+    // tee could flush it AFTER the Clear had already run, leaving
+    // a stray row above the TUI grid that accumulated visible
+    // scroll over redraw cycles (operator-real-hardware report
+    // 2026-05-03: "TUI was scrolled up off the screen").
+    //
+    // Switching to println! keeps the banner on fd 1, the same path
+    // as the Clear escape — ordering is deterministic, no fifo race,
+    // and CI consumers that grep the serial log for the literal
+    // "aegis-boot rescue-tui starting" still match (serial.log
+    // captures both the print AND the Clear escape; the print is
+    // wiped from the visible framebuffer by Clear but the captured
+    // bytes remain). Mirror via tracing::info! so the structured
+    // log file gets it too.
+    println!(
         "aegis-boot rescue-tui starting: discovered {} ISO(s){}",
         isos.len(),
         if skipped > 0 {
