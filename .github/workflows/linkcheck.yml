@@ -69,6 +69,8 @@ jobs:
           args: >-
             --no-progress
             --max-redirects 5
+            --max-retries 3
+            --retry-wait-time 2
             --exclude-all-private
             --exclude-loopback
             --exclude-link-local

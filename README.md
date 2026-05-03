@@ -28,6 +28,24 @@ A signed UEFI Secure Boot rescue environment that lets operators pick any ISO fr
 
 **Status:** pre-1.0. [CHANGELOG.md](./CHANGELOG.md) has the per-release detail; v1.0.0 is gated on the multi-vendor real-hardware sweep ([#51](https://github.com/aegis-boot/aegis-boot/issues/51)).
 
+## See it in action
+
+Three CLI demos that load instantly — no setup, no flash, no risk to any disk:
+
+**`aegis-boot tour`** — what aegis-boot is in 30 seconds, with the 4-command path to a working stick:
+
+<img src="./docs/demos/cli-tour.svg" alt="aegis-boot tour — terminal walkthrough of the 4-command path" width="100%">
+
+**`aegis-boot recommend`** — browse the curated catalog of 20 known-good ISOs, each marked with its Secure Boot signing chain:
+
+<img src="./docs/demos/cli-recommend.svg" alt="aegis-boot recommend — curated catalog with per-ISO Secure Boot status" width="100%">
+
+**`aegis-boot recommend ubuntu-24.04-live-server`** — drill into a single entry to see the verified-download recipe:
+
+<img src="./docs/demos/cli-recommend-detail.svg" alt="aegis-boot recommend ubuntu-24.04-live-server — per-ISO verify recipe" width="100%">
+
+Deeper-dive demos of the destructive flash flows + the rescue-tui under QEMU + OVMF SecureBoot are tracked in [#348](https://github.com/aegis-boot/aegis-boot/issues/348) — those need real hardware (or a loop device) to record.
+
 ## What it does
 
 1. Flash an aegis-boot image to a USB stick (`aegis-boot flash` or `dd`).
@@ -197,7 +215,7 @@ Full developer loop: [docs/LOCAL_TESTING.md](./docs/LOCAL_TESTING.md).
 
 ## Build environment
 
-- Rust 1.88.0 (pinned in `Dockerfile.locked`, enforced via `rust-version` in every `Cargo.toml`)
+- Rust 1.95.0 (build-toolchain pin in `Dockerfile.locked` + `rust-toolchain.toml`; MSRV is 1.88, declared via `rust-version` in workspace `Cargo.toml`)
 - Ubuntu 22.04 base (Docker) or a Nix flake
 - No EDK II / UEFI toolchain — we use shim + signed distro kernels instead
 

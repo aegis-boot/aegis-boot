@@ -7,7 +7,7 @@ Audience: a Linux-curious sysadmin who's read about Secure Boot but never set it
 aegis-boot writes a USB stick that:
 
 1. Boots into a tiny rescue menu on **any laptop with default firmware** — no BIOS changes, no Secure Boot disable
-2. Lets you pick an ISO from the stick (Ubuntu installer, Alpine rescue, Windows installer, your own)
+2. Lets you pick an ISO from the stick (Ubuntu installer, Alpine rescue, Fedora live, your own — see "What aegis-boot does NOT do" below for the Windows-installer caveat)
 3. Hands off to that ISO without rebooting (`kexec`)
 
 You write the stick **once**. After that, drop ISOs onto the data partition and they show up in the menu next boot. Same workflow as Ventoy, except aegis-boot keeps Secure Boot **enforcing** the whole time.

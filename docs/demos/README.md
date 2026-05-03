@@ -9,23 +9,31 @@ depending on an external host (asciinema.org).
 
 ## Status
 
-This directory holds the **harness** — the scripts that record + render
-the demos — but **not yet the recordings themselves**. Recording the
-three flows is interactive (asciinema needs a real terminal driving the
-TUI / CLI flows + a built `aegis-boot.img` for the QEMU demo); a
-maintainer or contributor with the dev environment runs the harness
-once and commits the resulting `.svg` files.
+Two demo tracks ship from this directory:
 
-When the SVGs land, this directory will contain:
+**Quick CLI demos (shipped)** — non-destructive, instant-load, no setup needed.
+Recorded autonomously and embedded above the fold in the project README:
 
-| File                          | Flow                                                       |
-| ----------------------------- | ---------------------------------------------------------- |
-| `01-quickstart.svg`           | `aegis-boot quickstart /dev/sdc` — sub-10-minute happy path |
-| `02-init.svg`                 | `aegis-boot init /dev/sdc --yes` — 3-distro panic-room      |
-| `03-qemu-boot.svg`            | QEMU+OVMF SecureBoot → rescue-tui ISO selection             |
+| File                          | Flow                                                                              |
+| ----------------------------- | --------------------------------------------------------------------------------- |
+| `cli-tour.svg`                | `aegis-boot tour` — 30-second walkthrough + 4-command path                        |
+| `cli-recommend.svg`           | `aegis-boot recommend` — curated catalog with per-ISO Secure Boot status          |
+| `cli-recommend-detail.svg`    | `aegis-boot recommend ubuntu-24.04-live-server` — single-entry verify recipe      |
 
-The README's "What it does" section embeds these via plain
-`<img src="docs/demos/<n>-<name>.svg">` once they exist.
+**Deep-dive demos (pending hardware)** — destructive flash flows + the rescue-tui
+under QEMU + OVMF SecureBoot. These need a real terminal driving the TUI / CLI
+flows + a built `aegis-boot.img` for the QEMU demo, so a maintainer with the dev
+environment has to run the harness:
+
+| File                          | Flow                                                                              |
+| ----------------------------- | --------------------------------------------------------------------------------- |
+| `01-quickstart.svg`           | `aegis-boot quickstart /dev/sdc` — sub-10-minute happy path                       |
+| `02-init.svg`                 | `aegis-boot init /dev/sdc --yes` — 3-distro panic-room                            |
+| `03-qemu-boot.svg`            | QEMU+OVMF SecureBoot → rescue-tui ISO selection                                   |
+
+The README's "See it in action" section embeds the quick demos via plain
+`<img src="docs/demos/<name>.svg">`. Deep-dive demos land in the same scheme
+once recorded.
 
 ## Recording
 

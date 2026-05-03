@@ -15,7 +15,7 @@ categories = ["filesystem", "embedded"]
 [lib]
 
 [dependencies]
-iso-parser = { path = "../iso-parser", version = "0.17" }
+iso-parser = { path = "../iso-parser", version = "0.18" }
 thiserror.workspace = true
 serde = { workspace = true }
 tracing.workspace = true
