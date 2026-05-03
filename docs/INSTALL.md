@@ -130,6 +130,7 @@ The flake pins to `nixos-unstable`; downgrade to a specific channel in your own 
 
 Sanity check:
 
+<!-- x-release-please-version -->
 ```bash
 aegis-boot --version       # → aegis-boot v0.18.0
 aegis-boot doctor          # 0–100 health score for host + stick
@@ -236,6 +237,7 @@ If the firmware refuses to show the USB entry, your boot mode might be CSM/Legac
 
 `rescue-tui` shows your ISOs with verification status:
 
+<!-- x-release-please-version -->
 ```
 aegis-boot v0.18.0    SB:enforcing  TPM:available
 

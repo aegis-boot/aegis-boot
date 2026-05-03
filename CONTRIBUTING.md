@@ -61,23 +61,43 @@ We follow semver pre-1.0 loosely:
 - **minor (`0.x.0`)** — new features, additive API changes, anything that warrants a release-notes section
 - **major (`x.0.0`)** — breaking API changes; v1.0.0 is gated on real-hardware validation ([#51](https://github.com/aegis-boot/aegis-boot/issues/51))
 
-Each release gets a CHANGELOG section, a tag, and a GitHub release. Build artifacts are uploaded by hand for now (CI release workflow paused; tracked in [#51](https://github.com/aegis-boot/aegis-boot/issues/51)).
+Each release gets a CHANGELOG section, a tag, and a GitHub release. Build artifacts (signed binaries, the `aegis-boot.img`, SBOM, SLSA provenance) are produced + cosign-signed by `.github/workflows/release.yml` on tag push.
 
-### Drafting release notes
+### Conventional-commit prefix on PR titles
 
-At release-cut time, run the git-cliff drafting assist to produce a first-cut changelog entry from conventional-commit subjects:
+Release automation parses PR titles for [conventional commit](https://www.conventionalcommits.org/) prefixes and uses them to decide the next semver bump + group entries in the auto-generated CHANGELOG. PR titles **must** match `<type>(<optional-scope>): <subject>`:
 
-```bash
-# Draft "what's in [Unreleased]" against last tag → HEAD:
-./scripts/draft-release-notes.sh
+| Prefix      | Bump (pre-1.0)        | CHANGELOG section    |
+| ----------- | --------------------- | -------------------- |
+| `feat:`     | minor (0.18 → 0.19)   | Features             |
+| `fix:`      | patch (0.18.0 → .1)   | Bug Fixes            |
+| `perf:`     | patch                 | Performance          |
+| `refactor:` | patch                 | Code Refactoring     |
+| `docs:`     | none                  | Documentation        |
+| `ci:`       | none                  | CI/CD                |
+| `build:`    | none                  | Build System         |
+| `revert:`   | inherits from reverted | Reverts             |
+| `chore:` `style:` `test:` | none    | hidden from CHANGELOG (still tagged in commits) |
 
-# Draft a specific new-version heading:
-./scripts/draft-release-notes.sh v0.15.0
-```
+Breaking changes are signalled by `feat!:` / `fix!:` / a `BREAKING CHANGE:` footer. While we're pre-1.0, breaking changes still bump the **minor** version (per release-please's `bump-minor-pre-major: true` policy in `release-please-config.json`); v1.0.0 cuts only when the real-hardware sweep ([#51](https://github.com/aegis-boot/aegis-boot/issues/51)) clears.
 
-The output is advisory, not authoritative — promote it into `CHANGELOG.md` by (1) re-wording bullets into aegis-boot's prose style (commit subjects say "what"; the CHANGELOG needs the "why" + user-visible impact), (2) dropping scaffolding PRs, and (3) promoting critical bug fixes out of their section into the lead. See the existing versioned entries in `CHANGELOG.md` for the target tone.
+### Cutting a release
 
-The draft script needs `git-cliff` locally (`cargo install --locked git-cliff@2.6.1`). It is intentionally not wired into CI — editorial control stays with the maintainer. Phase 7 of [#286](https://github.com/aegis-boot/aegis-boot/issues/286).
+The release flow is fully automated end-to-end via Google's [release-please](https://github.com/googleapis/release-please) action (`.github/workflows/release-please.yml`):
+
+1. **Commits accumulate on `main`.** Every PR with a conventional-commit title contributes to the next release.
+2. **release-please opens / updates a "chore: release X.Y.Z" PR.** This PR contains:
+   - `Cargo.toml` workspace.package.version bumped
+   - `CHANGELOG.md` prepended with the new section (grouped by conventional-commit type, with PR links)
+   - Annotated lines in `flake.nix`, `docs/INSTALL.md`, `docs/CLI.md`, and the 11 intra-workspace path-deps in `crates/{iso-probe,rescue-tui,aegis-cli}/Cargo.toml` (each carries an `x-release-please-version` annotation comment so release-please knows what to bump)
+   - `.release-please-manifest.json` updated
+3. **The maintainer reviews + merges the release PR.** This is the editorial control point — hand-edit the auto-generated CHANGELOG entry into aegis-boot's prose style here if you want richer release notes (commit subjects say "what"; the CHANGELOG benefits from the "why" + user-visible impact).
+4. **release-please tags the merge commit + creates the GitHub release** with the same body that landed in CHANGELOG.md.
+5. **The tag push fires `.github/workflows/release.yml`** — that workflow detects the pre-existing release and uploads cosign-signed assets (Linux + macOS binaries, `aegis-boot.img`, rescue-tui, initramfs, CycloneDX SBOM, SHA256SUMS). SLSA L2 provenance is generated separately.
+
+A note on PR-CI for the release PR: release-please opens its PR with the default `GITHUB_TOKEN`, which (per GitHub's recursive-workflow guard) does **not** trigger `pull_request` workflows. The maintainer can manually re-run CI from the release PR's checks tab. Once we add a fine-scoped PAT or GitHub App as `secrets.RELEASE_PLEASE_TOKEN`, this becomes automatic.
+
+If a release goes sideways (e.g. the v0.18.0 musl-tools build failure that needed a workflow hotfix), retrigger `release.yml` manually via `gh workflow run Release --ref main -f tag=vX.Y.Z` — the workflow's `gh release upload --clobber` is idempotent against the already-created release.
 
 ## CI gates your PR must pass
 
