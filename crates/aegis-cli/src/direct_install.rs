@@ -634,7 +634,10 @@ mod tests {
 
     #[test]
     fn build_mtype_argv_starts_with_mtype_and_minus_i() {
-        let argv = build_mtype_argv("/dev/sda1", crate::direct_install_manifest::MANIFEST_ESP_PATH);
+        let argv = build_mtype_argv(
+            "/dev/sda1",
+            crate::direct_install_manifest::MANIFEST_ESP_PATH,
+        );
         assert_eq!(argv.first().map(String::as_str), Some("mtype"));
         assert_eq!(argv.get(1).map(String::as_str), Some("-i"));
         assert_eq!(argv.get(2).map(String::as_str), Some("/dev/sda1"));
