@@ -22,7 +22,7 @@ exclude = ["crates/iso-parser/fuzz"]
 # this line bumped; merging that PR tags + cuts the GitHub release.
 # CI's doc-version drift-check (Phase 1c) greps an allowlist of
 # user-facing doc files and fails if any version literal diverges.
-version = "0.18.0" # x-release-please-version
+version = "0.19.0" # x-release-please-version
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"

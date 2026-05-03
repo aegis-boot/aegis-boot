@@ -2,6 +2,30 @@
 
 All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.19.0](https://github.com/aegis-boot/aegis-boot/compare/v0.18.0...v0.19.0) (2026-05-03)
+
+
+### Features
+
+* **initramfs:** Phase 1 of [#726](https://github.com/aegis-boot/aegis-boot/issues/726) — curated kitchen-sink + modalias coldplug ([#727](https://github.com/aegis-boot/aegis-boot/issues/727)) ([1f53633](https://github.com/aegis-boot/aegis-boot/commit/1f5363359fcfc3fe6117b74a56809818eb60a2a9))
+* **initramfs:** post-modprobe + rescue-tui telemetry capture to AEGIS_ISOS ([#718](https://github.com/aegis-boot/aegis-boot/issues/718)) ([3dbc1c7](https://github.com/aegis-boot/aegis-boot/commit/3dbc1c7fb6a74fffb8e14cbaa2152326b4e08802))
+* **initramfs:** ship HID + broader hardware-compat modules ([#713](https://github.com/aegis-boot/aegis-boot/issues/713)) ([0aefa0c](https://github.com/aegis-boot/aegis-boot/commit/0aefa0c272f0ed14ef22e5a24a03bfac256e1fd1))
+* **rescue-tui:** defer ISO hashing via AEGIS_LAZY_HASH for snappy TUI startup ([#724](https://github.com/aegis-boot/aegis-boot/issues/724)) ([052082d](https://github.com/aegis-boot/aegis-boot/commit/052082d2a6fae565f605d14aca58fd09601b4935))
+
+
+### Bug Fixes
+
+* **ci/release:** install musl-tools so ring builds against x86_64-unknown-linux-musl ([#705](https://github.com/aegis-boot/aegis-boot/issues/705)) ([9f4df21](https://github.com/aegis-boot/aegis-boot/commit/9f4df21a95cc3713016f04c46607ce77b967b1f4))
+* **ci:** release-please follow-up — Cargo.lock + CLI_SYNOPSIS regen + lychee compare-URL exclude ([#711](https://github.com/aegis-boot/aegis-boot/issues/711)) ([3b27060](https://github.com/aegis-boot/aegis-boot/commit/3b2706022cd080db553b994db15ec812f634b151))
+* **initramfs:** bulk-copy PHY/USB-NIC/HID/MMC subtrees + ship sdhci/dca/i2c deps ([#723](https://github.com/aegis-boot/aegis-boot/issues/723)) ([c648dce](https://github.com/aegis-boot/aegis-boot/commit/c648dce57561a2b47685e21b05757fa84ee7770f))
+* **initramfs:** explicit sync + per-boot stage checkpoints to AEGIS_ISOS ([#721](https://github.com/aegis-boot/aegis-boot/issues/721)) ([d1c8fd9](https://github.com/aegis-boot/aegis-boot/commit/d1c8fd90fdca765f7764ca717e00dd67b904fe30))
+* **initramfs:** symlink missing busybox applets (tail/head/sort/basename/dd/mkfifo) ([#720](https://github.com/aegis-boot/aegis-boot/issues/720)) ([c8ed3dc](https://github.com/aegis-boot/aegis-boot/commit/c8ed3dcca60a1ba555cb659cd79b92d8bd62ee82))
+* **iso-probe:** emit per-ISO hash-progress to stderr during eager startup verification ([#722](https://github.com/aegis-boot/aegis-boot/issues/722)) ([0fff86d](https://github.com/aegis-boot/aegis-boot/commit/0fff86d4b25369eddbdb4fa20dbe8bfc2e5d6fa4))
+* **release-please:** inline annotations on docs/CLI.md + docs/INSTALL.md ([#710](https://github.com/aegis-boot/aegis-boot/issues/710)) ([11b85b1](https://github.com/aegis-boot/aegis-boot/commit/11b85b164e4433f131d361fe1682fdd2782fe77a))
+* **release-please:** switch to simple release-type for cargo workspace ([#708](https://github.com/aegis-boot/aegis-boot/issues/708)) ([b23456a](https://github.com/aegis-boot/aegis-boot/commit/b23456a790d467d8a6f9d05af4d9586c9dd7ba89))
+* **rescue-tui:** stop tracing logs leaking onto framebuffer console ([#729](https://github.com/aegis-boot/aegis-boot/issues/729)) ([c87c542](https://github.com/aegis-boot/aegis-boot/commit/c87c5421c75144c50e80e74c1d9e9fa368a9f061))
+* **update:** read ESP-side manifest via mtype + skip gracefully when absent ([#712](https://github.com/aegis-boot/aegis-boot/issues/712)) ([022bf1a](https://github.com/aegis-boot/aegis-boot/commit/022bf1adc141e071b2199b730d34d478f5606b40))
+
 ## [Unreleased]
 
 ## [0.18.0] — 2026-05-02
