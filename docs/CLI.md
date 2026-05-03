@@ -946,8 +946,7 @@ aegis-boot tour --help
 
 ## Versioning
 
-<!-- x-release-please-version -->
-`aegis-boot --version` reports the workspace version (currently `0.18.0`). The CLI ships in lockstep with the rest of the workspace; `cargo install --path crates/aegis-cli` (or downloading a release binary) will give you a CLI that matches the on-stick rescue-tui.
+`aegis-boot --version` reports the workspace version (currently `0.18.0`). <!-- x-release-please-version --> The CLI ships in lockstep with the rest of the workspace; `cargo install --path crates/aegis-cli` (or downloading a release binary) will give you a CLI that matches the on-stick rescue-tui.
 
 `aegis-boot --version --json` emits the same info as a stable envelope for scripted install verification or Homebrew-style version matching:
 
