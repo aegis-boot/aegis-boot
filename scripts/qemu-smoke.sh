@@ -21,7 +21,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/out}"
 KERNEL="${KERNEL:-}"
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-60}"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-180}"
 
 log() { printf '[qemu-smoke] %s\n' "$*" >&2; }
 

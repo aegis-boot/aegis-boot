@@ -882,11 +882,23 @@ if [ -n "$AEGIS_DEV" ]; then
     # — legacy DATA_FS=fat32 sticks; the explicit codepage/iocharset
     # variants are kept because the kernel default `iocharset=iso8859-1`
     # is a module we don't ship (#68, #109).
+    # `sync` mount option: every write blocks until the kernel
+    # confirms the bytes are committed past its page cache. Trades
+    # write throughput for crash-survivability — and operator-side
+    # power-button resets count as crashes for our purposes.
+    # Real-hardware reports 2026-05-03 left 0-byte forensic logs on
+    # AEGIS_ISOS even with explicit `sync` syscalls in /init,
+    # because USB flash controllers don't honor sync(2)'s
+    # "committed past page cache" promise the way internal NVMe
+    # does. `-o sync` mount option pushes the wait one layer deeper
+    # so the kernel won't return from write(2) until the device
+    # ACKs. Cost: ~10 ms per write * a handful of /init log writes
+    # = ~50 ms total, lost in the noise of /init startup latency.
     for spec in \
-        "exfat:rw" \
-        "ext4:rw" \
-        "vfat:rw,codepage=437,iocharset=utf8" \
-        "vfat:rw"; do
+        "exfat:sync,rw" \
+        "ext4:sync,rw" \
+        "vfat:sync,rw,codepage=437,iocharset=utf8" \
+        "vfat:sync,rw"; do
         fstype="${spec%%:*}"
         opts="${spec#*:}"
         mount_err=$(/bin/mount -t "$fstype" -o "$opts" "$AEGIS_DEV" /run/media/aegis-isos 2>&1)
