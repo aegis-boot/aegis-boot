@@ -852,12 +852,39 @@ fi
 # Copy the snapshot to AEGIS_ISOS so it survives a reboot. Best-
 # effort — cp fails silently if the partition isn't mounted or is
 # read-only. /run/aegis-init.log stays on tmpfs regardless.
+#
+# `_ts` becomes the per-boot identifier shared by every log file
+# this script writes. Set OUTSIDE the cp branch so the rescue-tui
+# stderr capture below uses the same timestamp even when AEGIS_ISOS
+# isn't mounted.
+_ts=$(/bin/date +%Y%m%d-%H%M%S 2>/dev/null || /bin/echo "boot")
 if [ -d /run/media/aegis-isos ]; then
-    _ts=$(/bin/date +%Y%m%d-%H%M%S 2>/dev/null || /bin/echo "boot")
     if /bin/cp "$INIT_LOG" "/run/media/aegis-isos/aegis-boot-${_ts}.log" 2>/dev/null; then
+        # Force the cp + the snapshot's data blocks out to disk
+        # before the next phase runs. exfat doesn't auto-sync; on
+        # the AMD micro-PC report (2026-05-03 04:37) the file got
+        # created but data never flushed before the operator's
+        # power-button reset, leaving a 0-byte log on AEGIS_ISOS.
+        # An explicit sync trades ~10ms for a guaranteed forensic
+        # trail.
+        /bin/sync 2>/dev/null
         /bin/echo "init: wrote init log to AEGIS_ISOS/aegis-boot-${_ts}.log"
     fi
 fi
+
+# Stage-checkpoint helper. Each call appends one line to the
+# per-boot stages log + sync's it. If the next boot shows
+# `aegis-boot-<ts>-stages.log` ending mid-pipeline, we know exactly
+# which phase the operator's reset interrupted. Tiny + cheap; runs
+# every boot so we don't have to add diagnostic-mode branching.
+checkpoint() {
+    if [ -d /run/media/aegis-isos ] && [ -w /run/media/aegis-isos ]; then
+        /bin/echo "$(/bin/date '+%H:%M:%S' 2>/dev/null) [stage=$1]" \
+            >> "/run/media/aegis-isos/aegis-boot-${_ts}-stages.log" 2>/dev/null
+        /bin/sync 2>/dev/null
+    fi
+}
+checkpoint "snapshot-flushed"
 
 # Verbose-pause: if the kernel cmdline has aegis.verbose=1, pause
 # for 30s (or until Enter) so the operator can read the pre-TUI
@@ -921,6 +948,7 @@ fi
 if [ -n "$RESCUE_TUI_LOG" ]; then
     /bin/echo "init: rescue-tui stderr → $RESCUE_TUI_LOG (RUST_LOG=$RUST_LOG)"
 fi
+checkpoint "pre-rescue-tui-exec"
 
 # Hand off. Exit code semantics (#90):
 #   0        — operator chose Quit → drop to emergency shell (old default)
@@ -944,12 +972,28 @@ if [ -n "$RESCUE_TUI_LOG" ]; then
     /bin/mkfifo "$TUI_FIFO" 2>/dev/null || TUI_FIFO=""
 fi
 if [ -n "$TUI_FIFO" ]; then
+    # Background a periodic-sync loop so the captured stderr file
+    # gets flushed to AEGIS_ISOS every 2s. Without this, the
+    # tee-written file lives in the kernel page cache + the exfat
+    # write-back queue; an operator power-button reset (observed
+    # 2026-05-03) leaves the file at 0 bytes on disk even though
+    # tee has buffered megabytes into it. Loop terminates when
+    # rescue-tui's parent script does (loop exit on EOF read).
+    (
+        while [ -f "$RESCUE_TUI_LOG" ]; do
+            /bin/sleep 2 2>/dev/null
+            /bin/sync 2>/dev/null
+        done
+    ) &
+    SYNC_PID=$!
     /bin/tee "$RESCUE_TUI_LOG" < "$TUI_FIFO" >&2 &
     TEE_PID=$!
     /usr/bin/rescue-tui 2>"$TUI_FIFO"
     rc=$?
     /bin/wait "$TEE_PID" 2>/dev/null
+    /bin/kill "$SYNC_PID" 2>/dev/null
     /bin/rm -f "$TUI_FIFO"
+    /bin/sync 2>/dev/null
 else
     # Fallback: no fifo (mkfifo unavailable, or RESCUE_TUI_LOG
     # unset). Run rescue-tui without persisting stderr — the
@@ -975,7 +1019,9 @@ if [ -n "$RESCUE_TUI_LOG" ] && [ -d /run/media/aegis-isos ] && [ -w /run/media/a
         /bin/tail -80 "$RESCUE_TUI_LOG" 2>/dev/null || /bin/echo "(stderr file unreadable)"
     } > "$_exit_log" 2>/dev/null && \
         /bin/echo "init: rescue-tui exit summary → $_exit_log"
+    /bin/sync 2>/dev/null
 fi
+checkpoint "rescue-tui-exited rc=$rc"
 exec /bin/sh
 INIT_SH
 chmod 0755 "$STAGE_DIR/init"
