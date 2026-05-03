@@ -207,7 +207,12 @@ jobs:
 
       - name: QEMU smoke boot
         env:
-          TIMEOUT_SECONDS: "90"
+          # Bumped 90 → 180 in #727 (Phase 1 of #726): the maximalist
+          # driver-tree initramfs grew 18 MB → 54 MB compressed
+          # (~200 MB uncompressed). Kernel decompress on the 1-CPU
+          # GHA runner takes ~60-80 s by itself; old 90 s timeout
+          # left no headroom for /init + rescue-tui startup.
+          TIMEOUT_SECONDS: "180"
         run: ./scripts/qemu-smoke.sh
 
   # Phase 2c canary — kexec-e2e using the shared build artifacts.

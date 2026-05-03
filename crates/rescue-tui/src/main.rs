@@ -1582,12 +1582,32 @@ fn attempt_kexec(state: &mut AppState, idx: usize) {
     };
     // User override takes precedence over the ISO-declared default; fall
     // back to whatever iso-probe extracted from the ISO's own boot config.
-    let cmdline = state
+    let raw_cmdline = state
         .cmdline_overrides
         .get(&idx)
         .cloned()
         .or_else(|| prepared.cmdline.clone())
         .unwrap_or_default();
+    // Distribution-aware enrichment (#728). Adds `iso-scan/filename=`
+    // for Debian/Ubuntu casper-style ISOs (so casper init can find
+    // the .iso file on the partition + loop-mount its squashfs) +
+    // `console=tty0` if the operator hasn't set one (so the new
+    // kernel's boot output reaches the framebuffer the operator is
+    // looking at). Idempotent — calling it on an already-enriched
+    // cmdline is a no-op.
+    let cmdline = rescue_tui::kexec_cmdline::enrich_cmdline_for_kexec(
+        &raw_cmdline,
+        iso.distribution,
+        &iso.iso_path,
+    );
+    if cmdline != raw_cmdline {
+        tracing::info!(
+            distribution = ?iso.distribution,
+            raw = %raw_cmdline,
+            enriched = %cmdline,
+            "kexec cmdline enriched for distribution-specific boot scheme"
+        );
+    }
     let req = kexec_loader::KexecRequest {
         kernel: prepared.kernel.clone(),
         initrd: prepared.initrd.clone(),
