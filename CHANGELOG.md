@@ -2,6 +2,16 @@
 
 All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.19.1](https://github.com/aegis-boot/aegis-boot/compare/v0.19.0...v0.19.1) (2026-05-03)
+
+
+### Bug Fixes
+
+* **ci:** centralize QEMU timeouts via scripts/lib/timeouts.sh (closes [#733](https://github.com/aegis-boot/aegis-boot/issues/733)) ([#736](https://github.com/aegis-boot/aegis-boot/issues/736)) ([bad6d17](https://github.com/aegis-boot/aegis-boot/commit/bad6d17506cb54f98b097b650a05077d775a0328))
+* **ci:** composite action consolidates apt-get + chmod-kernels boilerplate (closes [#735](https://github.com/aegis-boot/aegis-boot/issues/735)) ([#737](https://github.com/aegis-boot/aegis-boot/issues/737)) ([9b994c7](https://github.com/aegis-boot/aegis-boot/commit/9b994c765d7520045403debc10b960cf6ca3cd62))
+* **initramfs:** silence kernel printk to /dev/console while rescue-tui owns the screen ([#732](https://github.com/aegis-boot/aegis-boot/issues/732)) ([1318ce6](https://github.com/aegis-boot/aegis-boot/commit/1318ce676be6b3b2ccdf9f0467022f18c2945428))
+* **release-please:** drop package-name + explicit title pattern so tagger matches ([#730](https://github.com/aegis-boot/aegis-boot/issues/730)) ([1d0c413](https://github.com/aegis-boot/aegis-boot/commit/1d0c413505426ba32432637c310685b04a45372d))
+
 ## [0.19.0](https://github.com/aegis-boot/aegis-boot/compare/v0.18.0...v0.19.0) (2026-05-03)
 
 
