@@ -79,11 +79,23 @@ fn tracing_subscriber_init() {
     // letting /init copy it to AEGIS_ISOS on shutdown (#721 already
     // hardlinks /run logs).
     //
-    // Non-interactive paths still log to stderr:
-    //   * AEGIS_A11Y=text    — text-mode runs in a serial / screen-
-    //                          reader context where nothing else owns
-    //                          stderr; logs ARE the UI there.
-    //   * TERM=dumb          — same logic.
+    // Non-interactive paths still log to stderr — none of them paint
+    // a TUI on the console, so there's no bleed-through risk:
+    //   * AEGIS_A11Y=text     — text-mode runs in a serial / screen-
+    //                           reader context where nothing else owns
+    //                           stderr; logs ARE the UI there.
+    //   * TERM=dumb           — same logic.
+    //   * AEGIS_AUTO_KEXEC    — non-interactive kexec mode (CI E2E,
+    //                           operator scripted boot). The TUI never
+    //                           starts; stderr → /dev/console is the
+    //                           only signal CI scripts can grep.
+    //                           kexec-e2e specifically greps for
+    //                           `AEGIS_AUTO_KEXEC: matched ISO` +
+    //                           `Mounted .* mount_fixture` from
+    //                           tracing — both must reach serial.
+    //   * AEGIS_TEST          — test_mode dispatcher (PR #680). Same
+    //                           shape as auto-kexec — non-interactive,
+    //                           CI greps stderr for landmarks.
     //   * AEGIS_LOG_TO_STDERR — explicit operator override for tests.
     //
     // `AEGIS_LOG_JSON=1` keeps the same semantics: structured JSON
@@ -93,6 +105,8 @@ fn tracing_subscriber_init() {
     });
 
     let force_stderr = std::env::var("AEGIS_LOG_TO_STDERR").is_ok()
+        || std::env::var("AEGIS_AUTO_KEXEC").is_ok()
+        || std::env::var("AEGIS_TEST").is_ok()
         || std::env::var("AEGIS_A11Y").is_ok_and(|v| v.eq_ignore_ascii_case("text"))
         || std::env::var("TERM").is_ok_and(|v| v == "dumb");
 
