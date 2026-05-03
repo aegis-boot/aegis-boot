@@ -70,8 +70,11 @@ jobs:
       contents: write       # commit version bumps + create the release tag + GitHub release
       pull-requests: write  # open / update the release PR
     outputs:
-      pr_number: ${{ steps.rp.outputs['--pr'] && fromJSON(steps.rp.outputs['--pr']).number || '' }}
-      pr_branch: ${{ steps.rp.outputs['--pr'] && fromJSON(steps.rp.outputs['--pr']).headBranchName || '' }}
+      # release-please-action exposes a `pr` output (JSON object) when
+      # it opens or updates a release PR. We pick the headBranchName
+      # so the regen job can check out the PR's branch.
+      pr_number: ${{ steps.rp.outputs.pr && fromJSON(steps.rp.outputs.pr).number || '' }}
+      pr_branch: ${{ steps.rp.outputs.pr && fromJSON(steps.rp.outputs.pr).headBranchName || '' }}
       release_created: ${{ steps.rp.outputs.release_created }}
     steps:
       # Reads release-please-config.json + .release-please-manifest.json
