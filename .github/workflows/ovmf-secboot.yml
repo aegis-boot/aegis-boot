@@ -38,10 +38,15 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
       - name: Install QEMU + OVMF (with MS-enrolled vars)
+        # `secboot-foundation` profile — minimal: qemu + ovmf only.
+        # No kernel, no shim, no grub — just enough to boot OVMF and
+        # observe the SecBoot-enabled banner. (#735)
+        uses: ./.github/actions/install-ci-deps
+        with:
+          profile: secboot-foundation
+
+      - name: Verify OVMF artifacts present
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 ovmf
           ls -l /usr/share/OVMF/OVMF_CODE_4M.secboot.fd \
                 /usr/share/OVMF/OVMF_VARS_4M.ms.fd
 
