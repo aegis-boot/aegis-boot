@@ -475,6 +475,7 @@ fi
 for applet in sh mount umount mkdir ls cat dmesg switch_root losetup \
               mdev blkid lsblk modprobe sleep echo ln readlink rmdir \
               findfs uname grep sed cp rm tee date \
+              tail head sort basename dd mkfifo wait \
               udhcpc ip kill route nslookup hostname; do
     ln -sf /bin/busybox "$STAGE_DIR/bin/$applet"
 done
