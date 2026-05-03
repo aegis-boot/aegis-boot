@@ -927,12 +927,35 @@ fi
 #   anything — crash / unclean exit → emergency shell
 # All paths land in /bin/sh; the different branches only differ in the
 # banner so an operator reading the serial log can tell which happened.
+#
+# Tee discipline: rescue-tui's stderr must land in BOTH the persistent
+# log file AND on the original console (where the e2e QEMU canaries
+# grep for "aegis-boot rescue-tui starting"). A naive
+# `2>"$RESCUE_TUI_LOG"` redirect lands it in the file only — the
+# canaries time out waiting for the marker. Busybox sh doesn't have
+# process substitution (`>(...)`) so we do it via a named pipe +
+# background tee. The tee inherits fd 2 (= console) from the script,
+# so writing to file + fd 2 forks the stream.
+TUI_FIFO=""
+TEE_PID=""
 if [ -n "$RESCUE_TUI_LOG" ]; then
-    /usr/bin/rescue-tui 2>"$RESCUE_TUI_LOG"
-else
-    /usr/bin/rescue-tui
+    TUI_FIFO="/tmp/aegis-tui-stderr-fifo"
+    /bin/mkfifo "$TUI_FIFO" 2>/dev/null || TUI_FIFO=""
 fi
-rc=$?
+if [ -n "$TUI_FIFO" ]; then
+    /bin/tee "$RESCUE_TUI_LOG" < "$TUI_FIFO" >&2 &
+    TEE_PID=$!
+    /usr/bin/rescue-tui 2>"$TUI_FIFO"
+    rc=$?
+    /bin/wait "$TEE_PID" 2>/dev/null
+    /bin/rm -f "$TUI_FIFO"
+else
+    # Fallback: no fifo (mkfifo unavailable, or RESCUE_TUI_LOG
+    # unset). Run rescue-tui without persisting stderr — the
+    # console-only path matches v0.18 behavior.
+    /usr/bin/rescue-tui
+    rc=$?
+fi
 case "$rc" in
     0)   /bin/echo "init: rescue-tui quit cleanly; dropping to emergency shell" ;;
     42)  /bin/echo "init: rescue shell requested by operator (#90)" ;;
