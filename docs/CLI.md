@@ -570,7 +570,7 @@ Every other USB-imaging tool is silent after flash. The attestation receipt is t
 ```json
 {
   "schema_version": 1,
-  "tool_version": "0.19.1", /* x-release-please-version */
+  "tool_version": "0.19.2", /* x-release-please-version */
   "flashed_at": "2026-04-16T12:34:56Z",
   "operator": "william",
   "host": {
@@ -856,7 +856,7 @@ The verified bundle is cached at `$XDG_CACHE_HOME/aegis-boot/signed-chain/<bundl
 
 ```bash
 # Fetch from the maintainer's release origin
-aegis-boot fetch-trust-chain https://github.com/aegis-boot/aegis-boot/releases/download/v0.19.1/bundle/ # x-release-please-version
+aegis-boot fetch-trust-chain https://github.com/aegis-boot/aegis-boot/releases/download/v0.19.2/bundle/ # x-release-please-version
 
 # Override the cache base (e.g. for CI builds with a writable tmpfs)
 aegis-boot fetch-trust-chain --cache-base /var/cache/my-build https://example.invalid/bundle/
@@ -946,7 +946,7 @@ aegis-boot tour --help
 
 ## Versioning
 
-`aegis-boot --version` reports the workspace version (currently `0.19.1`). <!-- x-release-please-version --> The CLI ships in lockstep with the rest of the workspace; `cargo install --path crates/aegis-cli` (or downloading a release binary) will give you a CLI that matches the on-stick rescue-tui.
+`aegis-boot --version` reports the workspace version (currently `0.19.2`). <!-- x-release-please-version --> The CLI ships in lockstep with the rest of the workspace; `cargo install --path crates/aegis-cli` (or downloading a release binary) will give you a CLI that matches the on-stick rescue-tui.
 
 `aegis-boot --version --json` emits the same info as a stable envelope for scripted install verification or Homebrew-style version matching:
 
@@ -954,7 +954,7 @@ aegis-boot tour --help
 {
   "schema_version": 1,
   "tool": "aegis-boot",
-  "version": "0.19.1" /* x-release-please-version */
+  "version": "0.19.2" /* x-release-please-version */
 }
 ```
 
