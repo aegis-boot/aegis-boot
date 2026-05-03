@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Composite action consolidating apt-get install + kernel chmod
+# boilerplate that previously appeared 8 times across e2e-suite.yml
+# (and 1x in ovmf-secboot.yml). See issue #735 for context.
+#
+# Profiles:
+#   qemu             — bare QEMU + kernel + busybox/cpio for initramfs work.
+#                      Used by qemu-smoke + test-mode dispatcher jobs.
+#   kexec            — qemu profile + xorriso + util-linux + mount for
+#                      building the fixture ISO and loop-mounting it.
+#   secboot          — qemu profile + OVMF + signed shim/grub + FAT/exFAT
+#                      tools + gdisk for the full SecBoot canaries
+#                      (mkusb, direct-install, update-rotate, ovmf-e2e).
+#   secboot-foundation — minimal: qemu-system-x86 + ovmf only. Used by
+#                      ovmf-secboot.yml's foundation smoke (no kernel,
+#                      no initramfs, no shim handshake — just OVMF init).
+#   initramfs-build  — busybox-static + cpio + kernel for build-shared
+#                      jobs that don't run QEMU themselves.
+#
+# `extras` lets a caller add 1-2 packages on top without authoring a
+# new profile (e.g. `util-linux diffutils` for direct-install).
+#
+# After install, the action runs `chmod 0644` on /boot kernel + initrd
+# images so QEMU (running as user) can read them — historic Ubuntu
+# runner setting them mode 0600.
+
+name: 'Install aegis-boot CI deps'
+description: 'apt-get install + kernel chmod boilerplate for QEMU / SecBoot / initramfs CI'
+
+inputs:
+  profile:
+    description: 'qemu | kexec | secboot | secboot-foundation | initramfs-build'
+    required: true
+  extras:
+    description: 'Additional apt packages to install (space-separated)'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: 'apt-get install (profile=${{ inputs.profile }})'
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ inputs.profile }}" in
+          qemu)
+            PACKAGES="qemu-system-x86 linux-image-generic busybox-static cpio"
+            ;;
+          kexec)
+            PACKAGES="qemu-system-x86 linux-image-virtual busybox-static cpio xorriso util-linux mount"
+            ;;
+          secboot)
+            PACKAGES="qemu-system-x86 ovmf shim-signed grub-efi-amd64-signed linux-image-virtual mtools dosfstools exfatprogs gdisk"
+            ;;
+          secboot-foundation)
+            PACKAGES="qemu-system-x86 ovmf"
+            ;;
+          initramfs-build)
+            PACKAGES="busybox-static cpio linux-image-virtual"
+            ;;
+          *)
+            echo "::error::install-ci-deps: unknown profile '${{ inputs.profile }}'" >&2
+            echo "valid profiles: qemu | kexec | secboot | secboot-foundation | initramfs-build" >&2
+            exit 2
+            ;;
+        esac
+        EXTRAS="${{ inputs.extras }}"
+        echo "::group::install-ci-deps profile=${{ inputs.profile }} extras='${EXTRAS}'"
+        sudo apt-get update
+        # shellcheck disable=SC2086
+        # PACKAGES + EXTRAS are space-separated tokens for apt-get; quoting
+        # would cause apt to look for a single literal package name with
+        # embedded spaces.
+        sudo apt-get install -y --no-install-recommends $PACKAGES $EXTRAS
+        echo "::endgroup::"
+
+    - name: 'Fix kernel + initrd permissions for QEMU (chmod 0644)'
+      shell: bash
+      run: |
+        # Historic GHA runner footgun: linux-image-* installs vmlinuz +
+        # initrd at mode 0600, but QEMU runs as the unprivileged
+        # workflow user. Without this, `-kernel /boot/vmlinuz-…` fails
+        # with EACCES. Glob is permissive — missing files are fine on
+        # the secboot-foundation profile that doesn't install a kernel.
+        sudo chmod 0644 /boot/vmlinuz-* /boot/initrd.img-* 2>/dev/null || true
+        ls -l /boot/vmlinuz-* /boot/initrd.img-* 2>/dev/null || true

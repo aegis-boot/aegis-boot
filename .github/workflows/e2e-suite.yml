@@ -73,22 +73,12 @@ jobs:
         # /lib/modules/<ver>/ that build-initramfs.sh bakes in. Consumers
         # (kexec-e2e-shared) install the same package on their own
         # runner; modules + kernel must match or modprobe fails inside
-        # QEMU and `ip link set lo up` panics PID 1. Without this step
-        # build-initramfs.sh falls back to the runner host's
-        # 6.8.0-*-azure modules, which don't load on a 5.15-virtual
-        # boot.
-        #
-        # qemu-smoke-shared works around this gap because qemu-smoke.sh
-        # doesn't modprobe anything; kexec-e2e.sh DOES (loop / isofs /
-        # udf for the fixture-ISO mount path). Adding the kernel here
-        # is what makes that consumer green.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            busybox-static cpio \
-            linux-image-virtual
-          sudo chmod 0644 /boot/vmlinuz-* /boot/initrd.img-* 2>/dev/null || true
-          ls -l /boot/vmlinuz-* /boot/initrd.img-*
+        # QEMU and `ip link set lo up` panics PID 1. The
+        # `initramfs-build` profile in install-ci-deps centralizes
+        # this package list (issue #735).
+        uses: ./.github/actions/install-ci-deps
+        with:
+          profile: initramfs-build
 
       - name: Install Rust toolchain (from rust-toolchain.toml)
         run: rustup show
@@ -167,22 +157,19 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Install QEMU + kernel runtime
+        uses: ./.github/actions/install-ci-deps
+        with:
+          profile: qemu
+
+      - name: Locate kernel
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 \
-            linux-image-generic \
-            busybox-static \
-            cpio
-          # linux-image-generic installs vmlinuz under /boot, typically
-          # 0644 on GHA runners. Verify readability up front. Same logic
-          # as the standalone qemu-smoke.yml.
-          ls -l /boot/vmlinuz-*-generic | tee /tmp/kernels.txt
+          # The composite action already chmod 0644'd /boot/vmlinuz-*;
+          # this step picks the latest -generic kernel and exports it.
           KERNEL=$(ls -1 /boot/vmlinuz-*-generic 2>/dev/null | sort | tail -1)
           if [ -z "$KERNEL" ] || [ ! -r "$KERNEL" ]; then
-            echo "No readable kernel; attempting chmod"
-            sudo chmod 0644 /boot/vmlinuz-*-generic || true
-            KERNEL=$(ls -1 /boot/vmlinuz-*-generic 2>/dev/null | sort | tail -1)
+            echo "::error::No readable -generic kernel under /boot" >&2
+            ls -l /boot/vmlinuz-* 2>&1 || true
+            exit 1
           fi
           echo "KERNEL=$KERNEL" >> "$GITHUB_ENV"
 
@@ -227,19 +214,11 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Install runtime + fixture-build tools
-        # Mirror of kexec-e2e.yml's deps, minus the rescue-tui /
-        # initramfs build prereqs (busybox-static + cpio for those
-        # are still pulled because qemu-kexec-e2e.sh's fixture build
-        # uses busybox internally).
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 \
-            linux-image-virtual \
-            busybox-static cpio \
-            xorriso util-linux mount
-          sudo chmod 0644 /boot/vmlinuz-* /boot/initrd.img-* 2>/dev/null || true
-          ls -l /boot/vmlinuz-* /boot/initrd.img-*
+        # `kexec` profile = qemu profile + xorriso + util-linux + mount
+        # for the loop-mount fixture-ISO build path. (#735)
+        uses: ./.github/actions/install-ci-deps
+        with:
+          profile: kexec
 
       - name: Download shared artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
@@ -277,18 +256,11 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Install signed boot chain + image tooling
-        # Mirror of mkusb.yml's deps minus busybox-static + cpio (the
-        # initramfs is consumed pre-built; we don't rebuild it here).
-        # linux-image-virtual still needed because mkusb.sh reads
-        # /boot/vmlinuz-* + /boot/initrd.img-* to assemble the image.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 ovmf \
-            shim-signed grub-efi-amd64-signed linux-image-virtual \
-            mtools dosfstools exfatprogs gdisk
-          sudo chmod 0644 /boot/vmlinuz-* /boot/initrd.img-* 2>/dev/null || true
-          ls -l /boot/vmlinuz-* /boot/initrd.img-*
+        # `secboot` profile = qemu + OVMF + signed shim/grub +
+        # mtools/dosfstools/exfatprogs/gdisk for full SecBoot canary. (#735)
+        uses: ./.github/actions/install-ci-deps
+        with:
+          profile: secboot
 
       - name: Download shared artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
@@ -358,15 +330,12 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Install signed boot chain + image tooling
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 ovmf \
-            shim-signed grub-efi-amd64-signed linux-image-virtual \
-            mtools dosfstools exfatprogs gdisk \
-            util-linux diffutils
-          sudo chmod 0644 /boot/vmlinuz-* /boot/initrd.img-* 2>/dev/null || true
-          ls -l /boot/vmlinuz-* /boot/initrd.img-*
+        # `secboot` profile + util-linux + diffutils for direct-install's
+        # ESP byte-parity check. (#735)
+        uses: ./.github/actions/install-ci-deps
+        with:
+          profile: secboot
+          extras: util-linux diffutils
 
       - name: Download shared artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
@@ -520,16 +489,11 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Install deps (QEMU + OVMF + signed boot chain + tooling)
-        # Mirror of update-rotate-e2e.yml's deps. linux-image-virtual
-        # still needed: mkusb.sh / direct-install read /boot/vmlinuz-*.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 ovmf \
-            shim-signed grub-efi-amd64-signed linux-image-virtual \
-            mtools dosfstools exfatprogs gdisk \
-            util-linux
-          sudo chmod 0644 /boot/vmlinuz-* /boot/initrd.img-* 2>/dev/null || true
+        # `secboot` profile + util-linux for update-rotate's loop work. (#735)
+        uses: ./.github/actions/install-ci-deps
+        with:
+          profile: secboot
+          extras: util-linux
 
       - name: Download shared artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
@@ -666,18 +630,11 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Install signed boot chain + tooling
-        # Mirror of ovmf-secboot.yml's `ovmf-secboot-e2e` deps minus
-        # busybox-static + cpio (initramfs is consumed pre-built).
-        # ovmf-secboot-e2e.sh accepts both -generic and -virtual
-        # kernels so linux-image-virtual is fine here (consistent with
-        # build-shared's choice).
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 ovmf \
-            shim-signed grub-efi-amd64-signed linux-image-virtual \
-            mtools dosfstools exfatprogs gdisk
-          sudo chmod 0644 /boot/vmlinuz-* /boot/initrd.img-* 2>/dev/null || true
+        # `secboot` profile — ovmf-secboot-e2e.sh accepts both -generic
+        # and -virtual kernels (linux-image-virtual ships with profile). (#735)
+        uses: ./.github/actions/install-ci-deps
+        with:
+          profile: secboot
 
       - name: Download shared artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
@@ -726,14 +683,11 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Install QEMU + kernel runtime
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 \
-            linux-image-generic \
-            busybox-static \
-            cpio
-          sudo chmod 0644 /boot/vmlinuz-* 2>/dev/null || true
+        # `qemu` profile — test-mode dispatcher reuses qemu-smoke.sh,
+        # same package set as the qemu-smoke job. (#735)
+        uses: ./.github/actions/install-ci-deps
+        with:
+          profile: qemu
 
       - name: Download shared artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
