@@ -201,6 +201,47 @@ if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
             log "WARNING: $name module not found (CONFIG_$kconfig_key not set?)"
         fi
     }
+    # Bulk-copy every .ko under a category subtree (e.g. all of
+    # drivers/net/phy/). Used for "ship every driver in this
+    # hardware family" decisions where cherry-picking each module by
+    # name would be brittle — a new vendor PHY chip lands in the
+    # kernel + we'd have to update the build script. Operator-
+    # reported gaps drove this approach (real-hardware boot 2026-05-03
+    # left a Realtek PHY-less stick because we shipped r8169 but
+    # missed realtek.ko).
+    #
+    # depmod runs against the staged tree at the bottom of this
+    # block, so dep resolution still works for the bulk-copied
+    # modules — modprobe pulls in transitive deps automatically.
+    copy_module_tree() {
+        local rel_subtree="$1"  # e.g. "kernel/drivers/net/phy"
+        local label="$2"        # human-readable for logs
+        local src_root="$KMOD_SRC/$rel_subtree"
+        if [[ ! -d "$src_root" ]]; then
+            log "module tree '$rel_subtree' not present in $KMOD_SRC — skipping"
+            return 0
+        fi
+        local count=0
+        local total_kb=0
+        while IFS= read -r -d '' src; do
+            local rel="${src#"$KMOD_SRC"/}"
+            local dir_part
+            dir_part=$(dirname "$rel")
+            local base
+            base=$(basename "$src")
+            # Strip extension(s) — copy_module accepts the bare module name.
+            local mod="${base%.zst}"
+            mod="${mod%.xz}"
+            mod="${mod%.gz}"
+            mod="${mod%.ko}"
+            if copy_module "$dir_part/$mod" "$MOD_DEST/$dir_part"; then
+                count=$((count + 1))
+                total_kb=$((total_kb + $(stat -c %s "$MOD_DEST/$dir_part/$mod.ko" 2>/dev/null || echo 0) / 1024))
+            fi
+        done < <(find "$src_root" -type f \
+            \( -name '*.ko' -o -name '*.ko.zst' -o -name '*.ko.xz' -o -name '*.ko.gz' \) -print0)
+        log "shipped module tree: $label ($count modules, ~${total_kb} KiB)"
+    }
     try_module "kernel/fs/isofs/isofs" "$MOD_DEST/kernel/fs/isofs" \
         "isofs" "CONFIG_ISO9660_FS"
     try_module "kernel/fs/udf/udf" "$MOD_DEST/kernel/fs/udf" \
@@ -334,6 +375,16 @@ if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
     # newer Intel platforms. mmc_core + mmc_block are usually built
     # into stock distro kernels (CONFIG_MMC=y) but we ship the host
     # controllers anyway since they're loadable.
+    # SDHCI core + Command Queue HCI — PARENT modules referenced by
+    # sdhci-pci and sdhci-acpi. Without these, modprobe fails the
+    # children with `Unknown symbol sdhci_*` (real-hardware report
+    # 2026-05-03 dmesg: ~50 unresolved symbols on a single boot).
+    try_module "kernel/drivers/mmc/host/sdhci" \
+        "$MOD_DEST/kernel/drivers/mmc/host" \
+        "sdhci" "CONFIG_MMC_SDHCI"
+    try_module "kernel/drivers/mmc/host/cqhci" \
+        "$MOD_DEST/kernel/drivers/mmc/host" \
+        "cqhci" "CONFIG_MMC_CQHCI"
     try_module "kernel/drivers/mmc/host/sdhci-pci" \
         "$MOD_DEST/kernel/drivers/mmc/host" \
         "sdhci-pci" "CONFIG_MMC_SDHCI_PCI"
@@ -367,6 +418,16 @@ if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
     try_module "kernel/drivers/net/ethernet/intel/igb/igb" \
         "$MOD_DEST/kernel/drivers/net/ethernet/intel/igb" \
         "igb" "CONFIG_IGB"
+    # Intel NIC dep modules — igb references `dca_*` and
+    # `i2c-algo-bit` symbols. Real-hardware dmesg report 2026-05-03
+    # showed ~6 unresolved symbols loading igb without these. Both
+    # tiny (< 30 KiB); shipping unconditionally is cheap insurance.
+    try_module "kernel/drivers/dca/dca" \
+        "$MOD_DEST/kernel/drivers/dca" \
+        "dca" "CONFIG_DCA"
+    try_module "kernel/drivers/i2c/algos/i2c-algo-bit" \
+        "$MOD_DEST/kernel/drivers/i2c/algos" \
+        "i2c-algo-bit" "CONFIG_I2C_ALGOBIT"
     # Intel I225/I226 2.5GbE — common on modern motherboards (most
     # AM5/LGA1700 boards 2022+). Distinct from igb (1GbE family);
     # operators on newer hardware were silently NIC-less without
@@ -377,6 +438,17 @@ if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
     try_module "kernel/drivers/net/ethernet/realtek/r8169" \
         "$MOD_DEST/kernel/drivers/net/ethernet/realtek" \
         "r8169" "CONFIG_R8169"
+    # Realtek PHY driver — r8169 (above) loads but cannot bring up
+    # the link without `realtek.ko` for PHY ID 0x001cc800
+    # (RTL8169-family PHYs). Real-hardware dmesg report 2026-05-03:
+    #     r8169 0000:02:00.0: no dedicated PHY driver found for
+    #     PHY ID 0x001cc800, maybe realtek.ko needs to be added to
+    #     initramfs?
+    # Kernel literally tells us what to ship. PHYLIB itself is
+    # built-in (CONFIG_PHYLIB=y) so we don't need a libphy module.
+    try_module "kernel/drivers/net/phy/realtek/realtek" \
+        "$MOD_DEST/kernel/drivers/net/phy/realtek" \
+        "realtek" "CONFIG_REALTEK_PHY"
     try_module "kernel/drivers/net/ethernet/realtek/8139too" \
         "$MOD_DEST/kernel/drivers/net/ethernet/realtek" \
         "8139too" "CONFIG_8139TOO"
@@ -433,6 +505,34 @@ if [[ -n "$KMOD_SRC" && -d "$KMOD_SRC" ]]; then
     try_module "kernel/fs/nls/nls_iso8859-1" \
         "$MOD_DEST/kernel/fs/nls" \
         "nls_iso8859-1" "CONFIG_NLS_ISO8859_1"
+
+    # --- bulk-copy resilient driver subtrees (operator request 2026-05-03)
+    # The cherry-picked try_module list above covers the most common
+    # devices but inevitably misses the long tail (a vendor PHY chip,
+    # a HID quirk for a niche keyboard, a USB Ethernet dongle nobody
+    # owned at design time). For a rescue environment we'd rather
+    # spend 10-15 MiB of initramfs to absorb that tail than ship a
+    # stick that's silent on someone's hardware.
+    #
+    # Subtrees chosen for size/value ratio:
+    #   * net/phy        — every PHY chip driver (~1-2 MiB), pulled
+    #                      automatically by NIC drivers via PHYLIB
+    #   * net/usb        — every USB Ethernet dongle driver (~2-3 MiB)
+    #   * hid            — every HID quirk driver — keyboards, mice,
+    #                      tablets, gamepads (~3-5 MiB)
+    #   * dca, i2c/algos — Intel NIC dep modules (< 100 KiB)
+    #   * mmc/host       — every SDHCI variant (~1 MiB)
+    #
+    # Server-grade NICs (mlx5, bnxt_en, ice, i40e — each 5-10 MiB)
+    # stay out per the size budget; tracked in #716. Wi-Fi stays out
+    # per #714 (firmware-blob complications).
+    copy_module_tree "kernel/drivers/net/phy"   "PHY drivers (Realtek/Broadcom/Marvell/Intel/etc.)"
+    copy_module_tree "kernel/drivers/net/usb"   "USB Ethernet (asix/r8152/cdc_ether/dm9601/etc.)"
+    copy_module_tree "kernel/drivers/hid"       "HID quirk drivers (Apple/Logitech/MS/Wooting/etc.)"
+    copy_module_tree "kernel/drivers/dca"       "Intel DCA (igb/igc dep)"
+    copy_module_tree "kernel/drivers/i2c/algos" "I2C algorithms (igb dep)"
+    copy_module_tree "kernel/drivers/mmc/host"  "MMC/SDHCI host controllers"
+
     # Regenerate modules.dep so it references our decompressed .ko paths
     # (source kernel's modules.dep points at .ko.zst). depmod -b rebuilds
     # into the staged tree; no runtime kernel match needed.
