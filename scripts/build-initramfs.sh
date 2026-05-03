@@ -1029,6 +1029,21 @@ if [ -z "${RUST_LOG:-}" ]; then
     export RUST_LOG="rescue_tui=trace,iso_probe=debug,kexec_loader=debug,aegis_fetch=info,info"
 fi
 
+# Lazy-hash by default for snappy TUI startup. Without this,
+# rescue-tui's discover() eager-hashes every ISO before the alt-
+# screen takeover — ~90 s blank screen for a 3 GB Ubuntu ISO on
+# USB 2.0 (real-hardware UX report 2026-05-03). With AEGIS_LAZY_HASH
+# set, discover() returns NotPresent for every ISO + the operator
+# verifies on demand via the `v` key (existing #548 feature).
+# Operators / environments that want eager hashing back can
+# `unset AEGIS_LAZY_HASH` before the rescue-tui exec — handy for
+# lab benches where startup latency is fine and proactive trust
+# verdicts are preferred.
+if [ -z "${AEGIS_LAZY_HASH+x}" ]; then
+    export AEGIS_LAZY_HASH=1
+    /bin/echo "init: AEGIS_LAZY_HASH=1 (defer hash to operator demand — press 'v' in TUI)"
+fi
+
 # Persist rescue-tui stderr to AEGIS_ISOS so the operator-reported
 # "screen full of artifacts, dialogs sort of worked, typing 'boot'
 # did nothing" symptoms (2026-05-03) leave a forensic trail. Without
