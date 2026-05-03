@@ -2,6 +2,13 @@
 
 All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.19.3](https://github.com/aegis-boot/aegis-boot/compare/v0.19.2...v0.19.3) (2026-05-03)
+
+
+### CI/CD
+
+* regen Cargo.lock docs/reference/CLI_SYNOPSIS.md for release-please version bump ([#741](https://github.com/aegis-boot/aegis-boot/issues/741)) ([9fda1ca](https://github.com/aegis-boot/aegis-boot/commit/9fda1cad0bf21a5bac04482024ab663a68687549))
+
 ## [0.19.2](https://github.com/aegis-boot/aegis-boot/compare/v0.19.1...v0.19.2) (2026-05-03)
 
 

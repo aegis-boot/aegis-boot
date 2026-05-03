@@ -34,7 +34,7 @@
 
         aegis-bootctl = pkgs.rustPlatform.buildRustPackage {
           pname = "aegis-bootctl";
-          version = "0.19.2"; # x-release-please-version
+          version = "0.19.3"; # x-release-please-version
 
           src = ./.;
 
