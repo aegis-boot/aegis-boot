@@ -81,8 +81,15 @@ jobs:
             --exclude-path .git
             --exclude-path node_modules
             --exclude 'docs\.rs/(iso-parser|iso-probe|kexec-loader)$'
+            --exclude 'github\.com/aegis-boot/aegis-boot/compare/v[0-9]+\.[0-9]+\.[0-9]+\.\.\.v[0-9]+\.[0-9]+\.[0-9]+'
             './**/*.md'
             './man/**/*.in'
+          # The compare-URL exclude above is for release-please's
+          # auto-generated CHANGELOG entries — `## [X.Y.Z](.../compare/
+          # vA.B.C...vX.Y.Z)`. The compare URL 404s on the release PR
+          # (the new tag doesn't exist until merge) but resolves 200
+          # immediately after. Excluding the pattern is cleaner than
+          # carrying a workflow-conditional acceptance.
           # On scheduled runs, don't fail the job — we want the "file
           # an issue" step below to run. On PRs, DO fail the job so
           # broken links block merge.
