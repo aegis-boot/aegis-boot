@@ -40,6 +40,13 @@
 
           cargoLock = {
             lockFile = ./Cargo.lock;
+            # Git deps need an SRI hash so Nix can vendor them deterministically
+            # without network access at build time. aegis-catalog-data is the
+            # only git source we allow (see deny.toml [sources]); pinned by
+            # tag in crates/aegis-catalog/Cargo.toml.
+            outputHashes = {
+              "aegis-catalog-data-0.17.0" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+            };
           };
 
           # Build only the operator CLI binary from the workspace.
