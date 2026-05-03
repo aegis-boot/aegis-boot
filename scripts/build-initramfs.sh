@@ -1186,6 +1186,27 @@ fi
 if [ -n "$RESCUE_TUI_LOG" ]; then
     /bin/echo "init: rescue-tui stderr → $RESCUE_TUI_LOG (RUST_LOG=$RUST_LOG)"
 fi
+
+# Silence kernel printk -> /dev/console while rescue-tui owns the
+# screen. Without this, late driver loads (USB enumeration, modprobe
+# of detached devices, hotplug events) write dmesg lines to the
+# framebuffer console AT THE CURRENT CURSOR POSITION, scrolling the
+# TUI grid up off the screen. Operator-real-hardware report
+# 2026-05-03: "TUI was scrolled up off the screen and the bottom
+# third of the screens were log outputs." Save current value (default
+# is something like "4 4 1 7"), set to "1" (only EMERG prints to
+# console), restore on exit so the emergency shell still sees real-
+# time WARN/ERR. The kernel ring buffer + /dev/kmsg + dmesg(1) all
+# stay populated regardless — silenced messages are still recoverable
+# post-mortem via the dmesg-tail block above + the on-stick log.
+PRINTK_SAVED=""
+if [ -r /proc/sys/kernel/printk ] && [ -w /proc/sys/kernel/printk ]; then
+    PRINTK_SAVED=$(/bin/cat /proc/sys/kernel/printk 2>/dev/null)
+    if /bin/echo 1 > /proc/sys/kernel/printk 2>/dev/null; then
+        /bin/echo "init: silenced kernel printk -> console (saved=$PRINTK_SAVED; restored on rescue-tui exit)"
+    fi
+fi
+
 checkpoint "pre-rescue-tui-exec"
 
 # Hand off. Exit code semantics (#90):
@@ -1244,6 +1265,13 @@ case "$rc" in
     42)  /bin/echo "init: rescue shell requested by operator (#90)" ;;
     *)   /bin/echo "init: rescue-tui exited unexpectedly (rc=$rc); dropping to emergency shell" ;;
 esac
+
+# Restore kernel printk console verbosity now that the TUI is gone.
+# Emergency shell + post-TUI diagnostics need real-time WARN/ERR.
+if [ -n "$PRINTK_SAVED" ] && [ -w /proc/sys/kernel/printk ]; then
+    /bin/echo "$PRINTK_SAVED" > /proc/sys/kernel/printk 2>/dev/null && \
+        /bin/echo "init: restored kernel printk -> console ($PRINTK_SAVED)"
+fi
 # Persist rc + a tail of the captured stderr so the post-boot operator
 # (or me, on a future stick inspection) can see the exit cause without
 # re-rebooting. Best-effort, doesn't fail the init.
