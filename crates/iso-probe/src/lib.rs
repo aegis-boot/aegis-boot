@@ -329,12 +329,43 @@ fn find_iso_size(root: &Path, filename: &str) -> Option<u64> {
     walk_for_iso_size(root, filename, 3)
 }
 
-fn boot_entry_to_discovered(entry: &BootEntry, search_root: &Path) -> DiscoveredIso {
-    let iso_path = search_root.join(&entry.source_iso);
-    let hash_verification = verify_iso_hash(&iso_path).unwrap_or_else(|e| {
-        // Reading the ISO itself failed — surface as Unreadable with the
-        // ISO path as source so the operator sees "ISO bytes could not
-        // be read" rather than a silent "no verification" verdict. (#138)
+/// Eager-hash an ISO with operator-visible progress logging.
+///
+/// For a 3 GB Ubuntu ISO on USB 2.0 (~30 MB/s) this hash takes ~100 s
+/// — long enough that an operator-on-real-hardware report from
+/// 2026-05-03 read "rescue-tui never starts" + power-cycled, when in
+/// fact rescue-tui was just busy hashing. The tee discipline in /init
+/// forwards rescue-tui stderr to both the captured log and the
+/// framebuffer console; before ratatui's alt-screen takeover (which
+/// only happens AFTER `discover()` returns), these messages render
+/// directly on screen so the operator sees activity.
+///
+/// Cadence: one "starting" line per ISO + a progress line every ~8th
+/// of the file (so a 3 GB ISO emits ~8 progress ticks ≈ every 12 s on
+/// USB 2.0). Cheap; no impact on hash throughput.
+fn verify_iso_hash_with_console_progress(iso_path: &Path) -> HashVerification {
+    let total_bytes = std::fs::metadata(iso_path).map_or(0, |m| m.len());
+    let total_mib = total_bytes / (1024 * 1024);
+    tracing::info!(
+        iso = %iso_path.display(),
+        size_mib = total_mib,
+        "iso-probe: hashing ISO (eager startup verification)"
+    );
+    let last_logged = std::cell::Cell::new(0u64);
+    let log_step = (total_bytes / 8).max(64 * 1024 * 1024);
+    verify_iso_hash_with_progress(iso_path, |read, total| {
+        if read.saturating_sub(last_logged.get()) >= log_step || read == total {
+            let pct = (read.saturating_mul(100)).checked_div(total).unwrap_or(0);
+            tracing::info!(
+                read_mib = read / (1024 * 1024),
+                total_mib = total / (1024 * 1024),
+                pct,
+                "iso-probe:   hash progress"
+            );
+            last_logged.set(read);
+        }
+    })
+    .unwrap_or_else(|e| {
         tracing::warn!(
             iso = %iso_path.display(),
             error = %e,
@@ -344,7 +375,12 @@ fn boot_entry_to_discovered(entry: &BootEntry, search_root: &Path) -> Discovered
             source: iso_path.display().to_string(),
             reason: e.to_string(),
         }
-    });
+    })
+}
+
+fn boot_entry_to_discovered(entry: &BootEntry, search_root: &Path) -> DiscoveredIso {
+    let iso_path = search_root.join(&entry.source_iso);
+    let hash_verification = verify_iso_hash_with_console_progress(&iso_path);
     match &hash_verification {
         HashVerification::Verified { source, .. } => tracing::info!(
             iso = %iso_path.display(),
