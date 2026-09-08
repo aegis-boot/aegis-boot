@@ -100,12 +100,41 @@ jobs:
       # Scheduled runs that surface broken links → open an issue so
       # the maintainer notices. PR runs skip this (the failed check
       # is the signal).
-      - name: Create issue on broken-link rot (scheduled only)
+      # Reuse ONE tracking issue instead of opening a new one every week.
+      # Before this, the create step below ran unconditionally with a fixed
+      # title, so each scheduled scan filed another issue — 17 open duplicates
+      # by 2026-09, half the repo's open backlog, and still growing.
+      #
+      # Deliberately lists and filters client-side rather than using
+      # `gh issue list --search`: the search index is eventually consistent and
+      # has returned empty for issues that exist, which here would silently
+      # file a duplicate — the exact failure being fixed.
+      - name: Find the existing linkcheck tracking issue
+        id: tracking_issue
+        if: github.event_name == 'schedule' && steps.lychee.outputs.exit_code != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRACKING_TITLE: "linkcheck: broken links surfaced on scheduled scan"
+        run: |
+          set -euo pipefail
+          number=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --limit 200 \
+            --json number,title \
+            --jq '[.[] | select(.title == env.TRACKING_TITLE)] | sort_by(.number) | .[0].number // empty')
+          # Empty => no open tracking issue, so the next step creates one.
+          # Non-empty => the OLDEST open match, kept stable so the issue URL
+          # people bookmark does not move week to week.
+          echo "number=${number}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved tracking issue: ${number:-<none, will create>}"
+
+      - name: Create or update the broken-link tracking issue (scheduled only)
         if: github.event_name == 'schedule' && steps.lychee.outputs.exit_code != '0'
         uses: peter-evans/create-issue-from-file@e8ef132d6df98ed982188e460ebb3b5d4ef3a9cd  # v5
         with:
           title: "linkcheck: broken links surfaced on scheduled scan"
           content-filepath: ./lychee-report.md
+          # Empty string is treated as "not supplied" by the action, so this is
+          # create-or-update in one step.
+          issue-number: ${{ steps.tracking_issue.outputs.number }}
           labels: |
             bug
             documentation
