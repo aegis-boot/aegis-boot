@@ -221,7 +221,7 @@ The same pushback prompted a handful of related simplifications shipped in this 
 
 The 6-agent `consensus_vote` approved L1 + L2 at 83 %. **None of the 6 roles asked "does an existing tool already solve this?"** Every role focused on how to build well, not whether to build at all. Rufus wasn't mentioned in any of the 6 role responses.
 
-Filed as [nexus-agents#2185](https://github.com/williamzujkowski/nexus-agents/issues/2185): add a `scope_steward` / `product_owner` role whose system prompt explicitly checks for existing-tool solutions + defaults toward "buy, don't build". See the issue for design details + the regression test that should guard against this class of miss in future.
+Filed as [nexus-agents#2185](https://github.com/nexus-substrate/nexus-agents/issues/2185): add a `scope_steward` / `product_owner` role whose system prompt explicitly checks for existing-tool solutions + defaults toward "buy, don't build". See the issue for design details + the regression test that should guard against this class of miss in future.
 
 ### Contrarian's concern — recorded, not adopted
 

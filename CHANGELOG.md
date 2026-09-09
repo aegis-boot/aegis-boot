@@ -244,7 +244,7 @@ Changes:
 
 `release.yml`'s `bump-brew-formula` job is unchanged — it commits an updated sha256 to `main` on tag push, which triggers `brew-test.yml`'s `push: paths: [Formula/**]` validation within minutes. That's the per-release gate the Contrarian panel role flagged as the replacement for the weekly cron.
 
-Follow-up from the same session: [nexus-agents#2185](https://github.com/williamzujkowski/nexus-agents/issues/2185) filed to add a `scope_steward` / `product_owner` role so future consensus_vote panels catch the "does an existing tool solve this?" question automatically.
+Follow-up from the same session: [nexus-agents#2185](https://github.com/nexus-substrate/nexus-agents/issues/2185) filed to add a `scope_steward` / `product_owner` role so future consensus_vote panels catch the "does an existing tool solve this?" question automatically.
 
 ### Anti-sprawl: Rufus as the recommended Windows path
 
@@ -252,7 +252,7 @@ Rescoped the Windows-operator story after a maintainer pushback. The recommended
 
 - **README Platform-status table + `docs/INSTALL.md § Windows` + `docs/CLI.md § flash`** updated so Rufus is the primary recommendation. `aegis-boot flash --direct-install` on Windows remains supported (the #419 epic's code is still shipped + tested) but is demoted to an advanced path for CLI-first operators + CI automation.
 - **`winget-manifests/` scaffolding deleted.** Templates for publishing `aegis-boot.exe` via `winget install` were un-wired, un-tested, and solved a problem (getting the CLI onto Windows) that the new recommendation ("just use Rufus + the `.img`") no longer cares about.
-- **`docs/design/windows-iso-boot.md` rescoped** to L1-only (rescue-tui prose panel pointing at Rufus when a Win11 ISO is detected). L2 (`aegis-boot flash --windows-target`) dropped — it would have reimplemented what Rufus already does better. The design doc's consensus-vote record is preserved along with the follow-up "did the vote miss the build-vs-buy question?" findings, which triggered [nexus-agents#2185](https://github.com/williamzujkowski/nexus-agents/issues/2185) (add Scope Steward / Product Owner role).
+- **`docs/design/windows-iso-boot.md` rescoped** to L1-only (rescue-tui prose panel pointing at Rufus when a Win11 ISO is detected). L2 (`aegis-boot flash --windows-target`) dropped — it would have reimplemented what Rufus already does better. The design doc's consensus-vote record is preserved along with the follow-up "did the vote miss the build-vs-buy question?" findings, which triggered [nexus-agents#2185](https://github.com/nexus-substrate/nexus-agents/issues/2185) (add Scope Steward / Product Owner role).
 - **Epic #512 closed** — the original multi-phase Windows-ISO-boot epic no longer has a real implementation target; the only work left is a small L1 PR (rescue-tui prose).
 
 ### Windows-native clippy promoted to strict (follow-up to #501)
