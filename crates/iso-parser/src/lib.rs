@@ -917,7 +917,18 @@ impl<E: IsoEnvironment> IsoParser<E> {
     }
 
     /// Extract boot entries from a mounted ISO.
+    // `async` is kept deliberately: this is part of the async surface callers
+    // await, and the body is sync only because every layout probe currently is.
+    // clippy 1.98 split `unused_async_trait_impl` out of `unused_async`, so the
+    // existing allow stopped covering it and `-D warnings` turned it into a
+    // build failure on floating stable while pinned 1.95.0 kept passing (#764).
+    // `unknown_lints` first, and it is load-bearing: the lint below does not
+    // exist in the pinned 1.95.0 toolchain, and naming an unknown lint is itself
+    // an error under `-D warnings`. Without this the fix would turn the stable
+    // job green by turning the PINNED job red. Verified locally on clippy 0.1.95.
+    #[allow(unknown_lints)]
     #[allow(clippy::unused_async)]
+    #[allow(clippy::unused_async_trait_impl)]
     async fn extract_boot_entries(
         &self,
         mount_point: &Path,
