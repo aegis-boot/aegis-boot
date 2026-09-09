@@ -2,6 +2,23 @@
 
 All notable changes to aegis-boot are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.19.4](https://github.com/aegis-boot/aegis-boot/compare/v0.19.3...v0.19.4) (2026-09-09)
+
+
+### Bug Fixes
+
+* **iso-parser:** allow clippy::unused_async_trait_impl across toolchains ([#766](https://github.com/aegis-boot/aegis-boot/issues/766)) ([e79bfe5](https://github.com/aegis-boot/aegis-boot/commit/e79bfe53857ec57afb1dc27b47e55c674c25e27a))
+
+
+### Documentation
+
+* repoint nexus-agents issue links after the org move ([#765](https://github.com/aegis-boot/aegis-boot/issues/765)) ([059adb5](https://github.com/aegis-boot/aegis-boot/commit/059adb59cd2a9bffcf7a67ac00630c0eb45b7e5e))
+
+
+### CI/CD
+
+* **linkcheck:** reuse one tracking issue instead of filing a new one weekly ([#763](https://github.com/aegis-boot/aegis-boot/issues/763)) ([b4aaec7](https://github.com/aegis-boot/aegis-boot/commit/b4aaec7c3ed9e5ee72937636137cb7492a6a2301))
+
 ## [0.19.3](https://github.com/aegis-boot/aegis-boot/compare/v0.19.2...v0.19.3) (2026-05-03)
 
 
